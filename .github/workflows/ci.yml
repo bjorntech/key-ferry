@@ -53,3 +53,29 @@ jobs:
 
       - name: Package dry run
         run: bun pm pack --dry-run
+
+      - name: Smoke test npm 12 verified publish dry run
+        env:
+          NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/empty-npmrc
+        run: |
+          set -euo pipefail
+          : > "$NPM_CONFIG_USERCONFIG"
+          unset NPM_TOKEN NODE_AUTH_TOKEN
+          release_dir="$RUNNER_TEMP/key-ferry-release"
+          mkdir -p "$release_dir"
+          npm pack --ignore-scripts --pack-destination "$release_dir"
+          node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto";
+          import { readFile, writeFile } from "node:fs/promises";
+          import { join } from "node:path";
+          const directory = process.env.RUNNER_TEMP + "/key-ferry-release";
+          const pkg = JSON.parse(await readFile("package.json", "utf8"));
+          const filename = `${pkg.name.slice(1).replaceAll("/", "-")}-${pkg.version}.tgz`;
+          const bytes = await readFile(join(directory, filename));
+          await writeFile(join(directory, "manifest.json"), JSON.stringify({
+            name: pkg.name, version: pkg.version, tag: `v${pkg.version}`, commit: "0".repeat(40), filename,
+            sha256: createHash("sha256").update(bytes).digest("hex"),
+          }));
+          NODE
+          npm install --global npm@12.2.0
+          node scripts/release/publish-verified.mjs --manifest "$release_dir/manifest.json" --dry-run

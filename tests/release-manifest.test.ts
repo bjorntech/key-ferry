@@ -43,3 +43,82 @@ describe("release manifest loading", () => {
     });
   });
 });
+
+import { createHash } from "node:crypto";
+import { symlink } from "node:fs/promises";
+import { getVerifiedPublishCommand } from "../scripts/release/publish-verified.mjs";
+
+async function withRelease(callback: (directory: string) => Promise<void>) {
+  const directory = await mkdtemp(join(tmpdir(), "key-ferry-publish-"));
+  const artifact = join(directory, validManifest.filename);
+  const bytes = Buffer.from("verified tarball");
+  await writeFile(artifact, bytes);
+  await writeFile(
+    join(directory, "package.json"),
+    JSON.stringify({ name: validManifest.name, version: validManifest.version }),
+  );
+  await writeFile(
+    join(directory, "manifest.json"),
+    JSON.stringify({ ...validManifest, sha256: createHash("sha256").update(bytes).digest("hex") }),
+  );
+  try {
+    await callback(directory);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
+describe("verified npm publish command", () => {
+  test("builds an absolute, explicit dry-run command with secure flags", async () => {
+    await withRelease(async (directory) => {
+      const result = await getVerifiedPublishCommand({
+        manifestPath: join(directory, "manifest.json"),
+        packagePath: join(directory, "package.json"),
+        action: "--dry-run",
+      });
+      expect(result.artifactPath).toBe(join(directory, validManifest.filename));
+      expect(result.args).toEqual([
+        "publish",
+        join(directory, validManifest.filename),
+        "--access",
+        "public",
+        "--registry=https://registry.npmjs.org",
+        "--provenance",
+        "--ignore-scripts",
+        "--dry-run",
+      ]);
+    });
+  });
+
+  test("fails closed without an explicit action, for bad digests, and for symlinks", async () => {
+    await withRelease(async (directory) => {
+      const manifestPath = join(directory, "manifest.json");
+      await expect(
+        getVerifiedPublishCommand({ manifestPath, packagePath: join(directory, "package.json") }),
+      ).rejects.toThrow("explicitly");
+      const manifest = JSON.parse(await Bun.file(manifestPath).text());
+      await writeFile(manifestPath, JSON.stringify({ ...manifest, sha256: "b".repeat(64) }));
+      await expect(
+        getVerifiedPublishCommand({
+          manifestPath,
+          packagePath: join(directory, "package.json"),
+          action: "--dry-run",
+        }),
+      ).rejects.toThrow("checksum");
+    });
+    await withRelease(async (directory) => {
+      const manifestPath = join(directory, "manifest.json");
+      const artifactPath = join(directory, validManifest.filename);
+      await rm(artifactPath);
+      await symlink(join(directory, "outside.tgz"), artifactPath);
+      await writeFile(join(directory, "outside.tgz"), "not the artifact");
+      await expect(
+        getVerifiedPublishCommand({
+          manifestPath,
+          packagePath: join(directory, "package.json"),
+          action: "--dry-run",
+        }),
+      ).rejects.toThrow("regular file");
+    });
+  });
+});
