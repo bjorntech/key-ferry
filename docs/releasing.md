@@ -47,7 +47,7 @@ account/org access, and 2FA before continuing.
    Use npm's current UI field names if they differ. A newly created,
    unvalidated configuration expires after 48 hours without a successful
    publish, so do not create a fake release merely to test it. Configure it
-   for the next real version (for example, `0.1.4`) after the bootstrap
+   for the next real version (for example, `0.1.5`) after the bootstrap
    package exists. See [npm Trusted Publishers](https://docs.npmjs.com/trusted-publishers/)
    and the [npm trust command reference](https://docs.npmjs.com/cli/v12/commands/npm-trust).
 6. After the first successful OIDC release, consider enabling npm's **Require

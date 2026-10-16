@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.5 — 2026-10-16
+
+This patch release completes child-process cleanup after forced termination.
+It contains no new runtime feature surface.
+
+### Fixed
+
+- Deterministically terminate and reap children after `SIGKILL`, with a bounded
+  one-second cleanup fallback and a stopped-state guard after completion.
+- Cover the already-exited and PID-polling regressions, including the flaky
+  macOS case and the repeated process-stress matrix.
+- Restrict publish workflow execution to main pushes and pull requests, rather
+  than tag events, while preserving the release quality gates.
+
 ## 0.1.4 — 2026-10-16
 
 This release carries forward the previously unreleased 0.1.3 publishing

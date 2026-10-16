@@ -25,7 +25,7 @@ native OpenCode OAuth and transport behavior.
 
 ## Plugin does not load
 
-Add `@bjorntech/key-ferry@0.1.4` to the OpenCode V2 `plugins` list and preserve
+Add `@bjorntech/key-ferry@0.1.5` to the OpenCode V2 `plugins` list and preserve
 unrelated configuration. OpenCode installs configured npm plugins
 automatically. Install Varlock separately, preferably with
 `brew install dmno-dev/tap/varlock`.
