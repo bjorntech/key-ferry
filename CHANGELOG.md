@@ -1,11 +1,12 @@
 # Changelog
 
-## 0.1.2 — 2026-10-16
+## 0.1.3 — 2026-10-16
 
-This release completes the previously unreleased publishing candidate's
-validation. It fixes release-manifest validation in the GitHub Actions
-workflow and validates the OIDC publishing and npm provenance automation. It
-contains no runtime feature changes.
+This release carries forward the previously unreleased 0.1.2 publishing
+candidate's validation. It fixes the shared verified-publish helper's release
+artifact path handling and makes the exact npm 12.2 dry-run and publish actions
+explicit in CI, including npm provenance automation validation. It contains no
+runtime feature changes.
 
 ## 0.1.0 — 2026-10-16
 
