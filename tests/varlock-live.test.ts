@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect } from "effect";
@@ -18,9 +18,24 @@ describe("Varlock live adapter", () => {
     async () => {
       const root = await mkdtemp(join(tmpdir(), "key-ferry-live-"));
       const config = await mkdtemp(join(tmpdir(), "key-ferry-live-config-"));
-      const previous = process.env.XDG_CONFIG_HOME;
-      process.env.XDG_CONFIG_HOME = config;
+      const home = join(root, "home");
+      const wrapper = join(root, "varlock-wrapper.sh");
+      await mkdir(home);
       try {
+        await writeFile(
+          wrapper,
+          [
+            "#!/bin/sh",
+            `export HOME=${JSON.stringify(home)}`,
+            `export XDG_CONFIG_HOME=${JSON.stringify(config)}`,
+            // Varlock 1.23.0 officially supports this opt-out env var; keep
+            // live tests free of telemetry while preserving production defaults.
+            "export VARLOCK_TELEMETRY_DISABLED=1",
+            `exec ${JSON.stringify(binary!)} "$@"`,
+            "",
+          ].join("\n"),
+        );
+        await chmod(wrapper, 0o700);
         // Keep this fixture synthetic and placeholder-only. No upstream or
         // secret manager is needed for the lifecycle handshake.
         await writeFile(
@@ -47,7 +62,7 @@ describe("Varlock live adapter", () => {
             makeProjectKeyFerryManager({
               projectDirectory: projectDirectory(root),
               adapter: {
-                command: [binary!],
+                command: [wrapper],
                 environmentKeys: ["LIVE_TOKEN"],
                 startupTimeoutMs: 30_000,
                 commandTimeoutMs: 10_000,
@@ -60,8 +75,6 @@ describe("Varlock live adapter", () => {
         );
         await Effect.runPromise(Effect.scoped(program));
       } finally {
-        if (previous === undefined) delete process.env.XDG_CONFIG_HOME;
-        else process.env.XDG_CONFIG_HOME = previous;
         await Promise.all([
           rm(root, { recursive: true, force: true }),
           rm(config, { recursive: true, force: true }),

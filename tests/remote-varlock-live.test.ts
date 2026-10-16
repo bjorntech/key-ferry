@@ -162,6 +162,9 @@ describe("remote Varlock relay", () => {
             `export HOME=${JSON.stringify(home)}`,
             `export XDG_CONFIG_HOME=${JSON.stringify(xdg)}`,
             `export NODE_EXTRA_CA_CERTS=${JSON.stringify(join(root, "upstream-cert.pem"))}`,
+            // Varlock 1.23.0 officially supports this opt-out env var; keep
+            // live tests free of telemetry while preserving production defaults.
+            "export VARLOCK_TELEMETRY_DISABLED=1",
             `exec ${JSON.stringify(binary!)} "$@"`,
             "",
           ].join("\n"),
