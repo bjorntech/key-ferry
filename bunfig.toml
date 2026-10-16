@@ -1,0 +1,5 @@
+[test]
+# Coverage is opt-in through `bun run test:coverage`; keep ordinary unit tests fast.
+coverageReporter = ["text", "lcov"]
+coverageDir = "coverage"
+coveragePathIgnorePatterns = ["dist/**", "**/generated/**", "**/*.test.ts", "**/*.spec.ts"]

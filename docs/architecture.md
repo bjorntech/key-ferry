@@ -120,8 +120,8 @@ headers, aborts upstream work on downstream cancellation, and rejects
 downstream paths that were not registered from the fixed upstream origin. Its
 legacy SSE endpoint rewrite is implemented. Registered session routes are
 capped at 256; duplicate routes do
-not consume capacity and new routes are rejected after the cap. The real
-remote Varlock test passes against the synthetic HTTPS fixture.
+not consume capacity and new routes are rejected after the cap. The remote
+Varlock integration is covered by an opt-in synthetic HTTPS fixture.
 
 Relay TLS uses CONNECT followed by one verified `tls.connect` call with the
 manager CA, target `servername`, and `rejectUnauthorized: true`. The custom
@@ -145,9 +145,10 @@ reconciles or recreates unhealthy selected `oauth:false` remote relays. It does
 not provide a credential prompt, replace native OAuth, or silently restore a
 direct remote connection.
 
-Verification uses native V2 types, mocks, package imports, and synthetic
-HTTPS remote transport. The current normal suite passes 53 tests with 2 gated
-skips; gated live Varlock fixtures were not run in this rename pass.
+Verification uses native V2 types, mocks, package imports, and synthetic HTTPS
+remote transport. The normal suite and gated Varlock fixtures are separate
+verification layers; neither is a production certification or a fully live
+OpenCode host/TUI run.
 
 ## Module ownership
 

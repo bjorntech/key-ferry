@@ -15,6 +15,8 @@ varlock proxy --help
 
 The plugin does not install Varlock, unlock secret stores, or read credentials
 for diagnostics. It expects a valid `.env.schema` in the configured project.
+Configure the Varlock environment, secret source, authentication, and proxy
+rules before starting OpenCode, following the [Varlock documentation](https://varlock.dev/).
 
 The integration protects explicitly mapped local MCP servers and selected
 remote API-key MCP servers. Direct provider transports are not isolated.
@@ -23,26 +25,17 @@ native OpenCode OAuth and transport behavior.
 
 ## Plugin does not load
 
-For local development, build this checkout and use the V2 package form in
-`examples/opencode.jsonc`:
-
-```sh
-bun install --frozen-lockfile
-bun run build
-```
-
-The example uses an absolute path to this checkout because the package is
-private and unpublished. The unscoped npm package
-`opencode-varlock` is an unrelated third-party OpenCode V1/MPL plugin and must
-not be substituted.
+Add `@bjorntech/key-ferry@0.1.0` to the OpenCode V2 `plugins` list and preserve
+unrelated configuration. OpenCode installs configured npm plugins
+automatically. Install Varlock separately, preferably with
+`brew install dmno-dev/tap/varlock`.
 
 Configure the server plugin from `opencode.json(c)`. OpenCode V2 discovers the
 package's sibling `./tui` export automatically, so a duplicate global
 `cli.json` entry is not needed. A global `cli.json` entry is optional only when
 the CLI connects to a remote OpenCode server that already loaded the server
 plugin, or for a genuinely CLI-only deployment. There is no project-local
-`cli.json` setup. Always use the absolute checkout path and never the unscoped
-package name.
+`cli.json` setup.
 
 The plugin requires OpenCode V2's native Effect entrypoint, compatible with
 `@opencode/plugin` 2.0.30 and Effect 4.0.1. Do not load it through the Promise
@@ -195,7 +188,7 @@ schema and configured authentication context, then use `/key-ferry-refresh` or
 available. Do not manually stop unrelated Varlock processes: only the process
 owned by this project manager is eligible for cleanup.
 
-## Verify the checkout
+## Verify the installation
 
 These commands do not contact a real service or require credentials:
 
@@ -215,6 +208,7 @@ The remote live fixture is gated and skipped by default:
 VARLOCK_LIVE_BINARY=/absolute/path/to/varlock bun test tests/remote-varlock-live.test.ts
 ```
 
-That command is a gated synthetic compatibility check. The current normal suite
-passes 53 tests with 2 gated skips; live fixtures were not run in this rename
-pass.
+That command is a gated synthetic compatibility check. The normal suite and
+live fixtures are separate verification layers; these commands do not certify
+production deployments, every external MCP provider, or a fully live OpenCode
+host/TUI session.

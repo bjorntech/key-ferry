@@ -1,0 +1,2365 @@
+{
+  "version": 1,
+  "commit": "66f5cf9",
+  "coverageUnit": "statements",
+  "entries": [
+    {
+      "identity": "module.safeMessage@308-15/244-0/262-0/220-1",
+      "file": "src/services/process.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:phase]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.error@308-16/244-0/262-0/220-1",
+      "file": "src/services/process.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:phase]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.kill@308-17/244-0/262-0/220-1",
+      "file": "src/services/process.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:child]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.callback#0@308-17/244-0/262-0/261-1/220-4/220-1",
+      "file": "src/services/process.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:resume]]",
+      "complexity": 4,
+      "coverage": 1,
+      "crap": 4
+    },
+    {
+      "identity": "module.finish@308-17/244-0/262-0/261-1/220-4/214-1/220-2/242-2/244-0/262-0/220-1",
+      "file": "src/services/process.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 3,
+      "coverage": 1,
+      "crap": 3
+    },
+    {
+      "identity": "module.callback#0@308-17/244-0/262-0/261-1/220-4/214-1/220-2/242-6/245-0/227-2/220-1",
+      "file": "src/services/process.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 4,
+      "coverage": 0,
+      "crap": 20
+    },
+    {
+      "identity": "module.callback#0@308-17/244-0/262-0/261-1/220-4/214-1/220-2/242-7/254-0/220-1",
+      "file": "src/services/process.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 2,
+      "coverage": 0,
+      "crap": 6
+    },
+    {
+      "identity": "module.spawnRaw@308-18/244-0/262-0/220-1",
+      "file": "src/services/process.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:input]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.callback#0@308-18/244-0/262-0/261-1/220-3/214-1/220-3",
+      "file": "src/services/process.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:resume]]",
+      "complexity": 3,
+      "coverage": 0.6,
+      "crap": 3.576
+    },
+    {
+      "identity": "module.callback#0@308-18/244-0/262-0/261-1/220-3/214-1/214-3/220-2/242-2/244-0/262-0/261-1/220-3",
+      "file": "src/services/process.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:done]]",
+      "complexity": 1,
+      "coverage": 0,
+      "crap": 2
+    },
+    {
+      "identity": "module.close@308-18/244-0/262-0/261-1/220-3/214-1/214-3/220-2/242-2/244-0/262-0/261-1/214-3/220-2/242-0/244-0/262-0/220-1",
+      "file": "src/services/process.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:code]]",
+      "complexity": 5,
+      "coverage": 0,
+      "crap": 30
+    },
+    {
+      "identity": "module.onError@308-18/244-0/262-0/261-1/220-3/214-1/214-3/220-2/242-2/244-0/262-0/261-1/214-3/220-2/242-1/244-0/262-0/220-1",
+      "file": "src/services/process.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 0,
+      "crap": 2
+    },
+    {
+      "identity": "module.callback#0@308-18/244-0/262-0/261-1/220-3/214-1/214-3/220-2/242-2/244-0/262-0/261-1/214-3/220-2/242-4/254-0/220-1",
+      "file": "src/services/process.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 0,
+      "crap": 2
+    },
+    {
+      "identity": "module.callback#0@308-18/244-0/262-0/261-1/220-3/214-1/214-3/220-2/242-4/244-0/262-0/261-1/220-1",
+      "file": "src/services/process.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 3,
+      "coverage": 1,
+      "crap": 3
+    },
+    {
+      "identity": "object.callback#0@308-18/244-0/262-0/261-1/220-3/214-1/214-3/220-2/242-5/245-0/214-1/214-1/211-2/304-1/220-1",
+      "file": "src/services/process.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 4,
+      "coverage": 0,
+      "crap": 20
+    },
+    {
+      "identity": "module.callback#0@308-18/244-0/262-0/261-1/220-3/220-2",
+      "file": "src/services/process.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:process]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.callback#0@308-18/244-0/262-0/261-1/220-3/214-2/220-2/214-1/220-1",
+      "file": "src/services/process.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 0,
+      "crap": 2
+    },
+    {
+      "identity": "module.run@308-19/244-0/262-0/220-1",
+      "file": "src/services/process.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:input]]",
+      "complexity": 3,
+      "coverage": 1,
+      "crap": 3
+    },
+    {
+      "identity": "module.callback#0@308-19/244-0/262-0/261-1/220-3/242-1/244-0/262-0/261-1/220-3",
+      "file": "src/services/process.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:resume]]",
+      "complexity": 3,
+      "coverage": 0.7142857142857143,
+      "crap": 3.2099125364431487
+    },
+    {
+      "identity": "module.onData@308-19/244-0/262-0/261-1/220-3/242-1/244-0/262-0/261-1/214-3/220-3/242-5/244-0/262-0/220-1",
+      "file": "src/services/process.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:which]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.callback#0@308-19/244-0/262-0/261-1/220-3/242-1/244-0/262-0/261-1/214-3/220-3/242-5/244-0/262-0/261-1/220-2",
+      "file": "src/services/process.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:chunk]]",
+      "complexity": 6,
+      "coverage": 1,
+      "crap": 6
+    },
+    {
+      "identity": "module.callback#0@308-19/244-0/262-0/261-1/220-3/242-1/244-0/262-0/261-1/214-3/220-3/242-5/244-0/262-0/261-1/220-2/220-2/242-1/246-1/242-2/245-0/220-1",
+      "file": "src/services/process.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 4,
+      "coverage": 0.3333333333333333,
+      "crap": 8.740740740740742
+    },
+    {
+      "identity": "module.close@308-19/244-0/262-0/261-1/220-3/242-1/244-0/262-0/261-1/214-3/220-3/242-10/244-0/262-0/220-1",
+      "file": "src/services/process.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:code]]",
+      "complexity": 6,
+      "coverage": 1,
+      "crap": 6
+    },
+    {
+      "identity": "module.callback#0@308-19/244-0/262-0/261-1/220-3/242-1/244-0/262-0/261-1/214-3/220-3/242-12/245-0/220-2",
+      "file": "src/services/process.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.callback#0@308-19/244-0/262-0/261-1/220-3/242-1/244-0/262-0/261-1/214-3/220-3/242-13/245-0/220-2",
+      "file": "src/services/process.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 2,
+      "coverage": 1,
+      "crap": 2
+    },
+    {
+      "identity": "module.callback#0@308-19/244-0/262-0/261-1/220-3/242-1/244-0/262-0/261-1/214-3/220-3/242-13/245-0/214-2/220-1/242-1/245-0/220-1",
+      "file": "src/services/process.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 4,
+      "coverage": 0.3333333333333333,
+      "crap": 8.740740740740742
+    },
+    {
+      "identity": "module.callback#0@308-19/244-0/262-0/261-1/220-3/242-1/244-0/262-0/261-1/214-3/220-3/242-14/254-0/220-1",
+      "file": "src/services/process.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "object.callback#0@308-19/244-0/262-0/261-1/220-3/242-2/244-0/262-0/261-1/228-4/214-1/214-1/211-1/220-1",
+      "file": "src/services/process.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "VarlockProtocolError.constructor@308-7/177-4",
+      "file": "src/varlock/protocol.ts",
+      "name": "constructor",
+      "fingerprint": "177[170[80:message]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.fail@263-8",
+      "file": "src/varlock/protocol.ts",
+      "name": "fail",
+      "fingerprint": "263[80:fail]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.isRecord@263-9",
+      "file": "src/varlock/protocol.ts",
+      "name": "isRecord",
+      "fingerprint": "263[80:isRecord]",
+      "complexity": 3,
+      "coverage": 1,
+      "crap": 3
+    },
+    {
+      "identity": "module.boundedString@263-10",
+      "file": "src/varlock/protocol.ts",
+      "name": "boundedString",
+      "fingerprint": "263[80:boundedString]",
+      "complexity": 5,
+      "coverage": 0.6666666666666666,
+      "crap": 5.9259259259259265
+    },
+    {
+      "identity": "module.boundedMap@263-11",
+      "file": "src/varlock/protocol.ts",
+      "name": "boundedMap",
+      "fingerprint": "263[80:boundedMap]",
+      "complexity": 10,
+      "coverage": 0.875,
+      "crap": 10.1953125
+    },
+    {
+      "identity": "module.parseJson@263-12",
+      "file": "src/varlock/protocol.ts",
+      "name": "parseJson",
+      "fingerprint": "263[80:parseJson]",
+      "complexity": 4,
+      "coverage": 0.8,
+      "crap": 4.128
+    },
+    {
+      "identity": "module.decodeSession@263-13",
+      "file": "src/varlock/protocol.ts",
+      "name": "decodeSession",
+      "fingerprint": "263[80:decodeSession]",
+      "complexity": 8,
+      "coverage": 0.7272727272727273,
+      "crap": 9.298271975957926
+    },
+    {
+      "identity": "module.decodeSessionList@263-14",
+      "file": "src/varlock/protocol.ts",
+      "name": "decodeSessionList",
+      "fingerprint": "263[95]",
+      "complexity": 3,
+      "coverage": 1,
+      "crap": 3
+    },
+    {
+      "identity": "module.findOwnedSession@263-15",
+      "file": "src/varlock/protocol.ts",
+      "name": "findOwnedSession",
+      "fingerprint": "263[95]",
+      "complexity": 3,
+      "coverage": 0.8,
+      "crap": 3.072
+    },
+    {
+      "identity": "module.callback#0@308-15/263-5/242-3/254-0/220-1",
+      "file": "src/varlock/protocol.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:session]]",
+      "complexity": 4,
+      "coverage": 1,
+      "crap": 4
+    },
+    {
+      "identity": "module.validateProxyUrl@263-16",
+      "file": "src/varlock/protocol.ts",
+      "name": "validateProxyUrl",
+      "fingerprint": "263[80:validateProxyUrl]",
+      "complexity": 16,
+      "coverage": 0.8181818181818182,
+      "crap": 17.53869271224643
+    },
+    {
+      "identity": "module.validateProxyWiring@263-17",
+      "file": "src/varlock/protocol.ts",
+      "name": "validateProxyWiring",
+      "fingerprint": "263[95]",
+      "complexity": 20,
+      "coverage": 1,
+      "crap": 20
+    },
+    {
+      "identity": "module.callback#0@308-17/263-4/242-1/246-0/227-2/220-1",
+      "file": "src/varlock/protocol.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:key]]",
+      "complexity": 5,
+      "coverage": 1,
+      "crap": 5
+    },
+    {
+      "identity": "module.selectPlaceholderEnvironment@263-18",
+      "file": "src/varlock/protocol.ts",
+      "name": "selectPlaceholderEnvironment",
+      "fingerprint": "263[95]",
+      "complexity": 10,
+      "coverage": 0.7777777777777778,
+      "crap": 11.097393689986282
+    },
+    {
+      "identity": "module.sanitizeSessionStatus@263-19",
+      "file": "src/varlock/protocol.ts",
+      "name": "sanitizeSessionStatus",
+      "fingerprint": "263[95]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.projectDirectory@263-19",
+      "file": "src/contracts.ts",
+      "name": "projectDirectory",
+      "fingerprint": "263[95]",
+      "complexity": 2,
+      "coverage": 0.6666666666666666,
+      "crap": 2.1481481481481484
+    },
+    {
+      "identity": "module.safeError@308-17/244-0/262-0/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:code]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.fromProcessError@308-18/244-0/262-0/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:error]]",
+      "complexity": 4,
+      "coverage": 1,
+      "crap": 4
+    },
+    {
+      "identity": "module.adapterOptions@263-19",
+      "file": "src/varlock/manager.ts",
+      "name": "adapterOptions",
+      "fingerprint": "263[80:adapterOptions]",
+      "complexity": 13,
+      "coverage": 1,
+      "crap": 13
+    },
+    {
+      "identity": "module.callback#0@308-19/263-3/242-3/246-0/227-2/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:v]]",
+      "complexity": 4,
+      "coverage": 1,
+      "crap": 4
+    },
+    {
+      "identity": "module.callback#0@308-19/263-3/242-4/246-0/227-2/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:v]]",
+      "complexity": 3,
+      "coverage": 1,
+      "crap": 3
+    },
+    {
+      "identity": "module.numberOption@308-19/263-3/242-5/244-0/262-0/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:name]]",
+      "complexity": 6,
+      "coverage": 0.8571428571428571,
+      "crap": 6.104956268221574
+    },
+    {
+      "identity": "module.safeProjectDirectory@263-20",
+      "file": "src/varlock/manager.ts",
+      "name": "safeProjectDirectory",
+      "fingerprint": "263[80:safeProjectDirectory]",
+      "complexity": 5,
+      "coverage": 0.6666666666666666,
+      "crap": 5.9259259259259265
+    },
+    {
+      "identity": "module.parseEnvironmentOutput@263-21",
+      "file": "src/varlock/manager.ts",
+      "name": "parseEnvironmentOutput",
+      "fingerprint": "263[80:parseEnvironmentOutput]",
+      "complexity": 16,
+      "coverage": 0.6842105263157895,
+      "crap": 24.061816591339845
+    },
+    {
+      "identity": "module.statusSnapshot@263-22",
+      "file": "src/varlock/manager.ts",
+      "name": "statusSnapshot",
+      "fingerprint": "263[80:statusSnapshot]",
+      "complexity": 7,
+      "coverage": 0.8,
+      "crap": 7.3919999999999995
+    },
+    {
+      "identity": "module.commandParts@263-23",
+      "file": "src/varlock/manager.ts",
+      "name": "commandParts",
+      "fingerprint": "263[80:commandParts]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.runCommand@263-24",
+      "file": "src/varlock/manager.ts",
+      "name": "runCommand",
+      "fingerprint": "263[80:runCommand]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.callback#0@308-24/263-8/242-1/254-0/214-1/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:error]]",
+      "complexity": 2,
+      "coverage": 1,
+      "crap": 2
+    },
+    {
+      "identity": "module.callback#0@308-24/263-8/242-1/254-0/214-2/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[207[209[80:stdout]]]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.candidatesForOwner@263-25",
+      "file": "src/varlock/manager.ts",
+      "name": "candidatesForOwner",
+      "fingerprint": "263[80:candidatesForOwner]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.callback#0@308-25/263-5/242-0/254-0/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:record]]",
+      "complexity": 3,
+      "coverage": 1,
+      "crap": 3
+    },
+    {
+      "identity": "module.makeProjectKeyFerryManager@263-26",
+      "file": "src/varlock/manager.ts",
+      "name": "makeProjectKeyFerryManager",
+      "fingerprint": "263[95]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.callback#0@308-26/263-5/242-0/254-0/214-0/212-0/214-2/219-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "219[42]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "object.callback#0@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-4/244-0/262-0/261-1/230-1/214-1/211-0/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[134]",
+      "complexity": 2,
+      "coverage": 0.8333333333333334,
+      "crap": 2.0185185185185186
+    },
+    {
+      "identity": "object.callback#0@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-4/244-0/262-0/261-1/230-1/214-1/211-1/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 0,
+      "crap": 2
+    },
+    {
+      "identity": "module.callback#0@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-5/244-0/262-0/261-1/214-1/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:entry]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "object.callback#0@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-6/244-0/262-0/261-1/230-1/214-1/211-0/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "object.callback#0@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-6/244-0/262-0/261-1/230-1/214-1/211-1/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 0,
+      "crap": 2
+    },
+    {
+      "identity": "object.callback#0@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-7/244-0/262-0/261-1/230-1/214-1/211-0/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "object.callback#0@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-7/244-0/262-0/261-1/230-1/214-1/211-1/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 0,
+      "crap": 2
+    },
+    {
+      "identity": "module.clearCapability@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-10/244-0/262-0/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:phase]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.healthCheck@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-11/244-0/262-0/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[184[167[80:Effect]]]",
+      "complexity": 2,
+      "coverage": 1,
+      "crap": 2
+    },
+    {
+      "identity": "module.callback#0@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-11/244-0/262-0/261-1/220-2/242-1/254-0/214-1/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:health]]",
+      "complexity": 2,
+      "coverage": 1,
+      "crap": 2
+    },
+    {
+      "identity": "module.callback#0@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-12/244-0/262-0/261-2/214-0/212-0/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.callback#0@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-12/244-0/262-0/261-2/214-2/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.waitForSession@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-13/244-0/262-0/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:handle]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.poll@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-13/244-0/262-0/261-1/220-3/242-1/244-0/262-0/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[184[167[80:Effect]]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.callback#0@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-13/244-0/262-0/261-1/220-3/242-1/244-0/262-0/261-1/220-2/219-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "219[42]",
+      "complexity": 4,
+      "coverage": 1,
+      "crap": 4
+    },
+    {
+      "identity": "object.callback#0@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-13/244-0/262-0/261-1/220-3/242-1/244-0/262-0/261-1/220-2/214-1/219-1/242-1/244-0/262-0/261-1/230-1/214-1/211-0/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "object.callback#0@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-13/244-0/262-0/261-1/220-3/242-1/244-0/262-0/261-1/220-2/214-1/219-1/242-1/244-0/262-0/261-1/230-1/214-1/211-1/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 0,
+      "crap": 2
+    },
+    {
+      "identity": "module.readEnvironment@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-14/244-0/262-0/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:session]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.callback#0@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-14/244-0/262-0/261-1/220-3/214-1/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[207[209[80:stdout]]]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.callback#0@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-14/244-0/262-0/261-1/220-3/214-1/214-1/220-2/219-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "219[42]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "object.callback#0@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-14/244-0/262-0/261-1/220-3/214-1/214-1/220-2/214-1/219-1/242-0/244-0/262-0/261-1/230-1/214-1/211-0/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "object.callback#0@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-14/244-0/262-0/261-1/220-3/214-1/214-1/220-2/214-1/219-1/242-0/244-0/262-0/261-1/230-1/214-1/211-1/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "object.callback#0@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-14/244-0/262-0/261-1/220-3/214-1/214-1/220-2/214-1/219-1/242-1/245-0/230-1/214-1/211-0/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[134]",
+      "complexity": 9,
+      "coverage": 0.9,
+      "crap": 9.081
+    },
+    {
+      "identity": "object.callback#0@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-14/244-0/262-0/261-1/220-3/214-1/214-1/220-2/214-1/219-1/242-1/245-0/230-1/214-1/211-1/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.startInternal@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-15/244-0/262-0/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[184[167[80:Effect]]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.callback#0@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-15/244-0/262-0/261-1/220-2/219-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "219[42]",
+      "complexity": 7,
+      "coverage": 0.9,
+      "crap": 7.049
+    },
+    {
+      "identity": "module.callback#0@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-15/244-0/262-0/261-1/220-2/214-1/219-1/242-5/244-0/262-0/261-1/230-1/214-1/214-1/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:error]]",
+      "complexity": 1,
+      "coverage": 0,
+      "crap": 2
+    },
+    {
+      "identity": "module.callback#0@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-15/244-0/262-0/261-1/220-2/214-1/219-1/242-7/244-0/262-0/261-1/230-1/214-1/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:session]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.callback#0@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-15/244-0/262-0/261-1/220-2/214-1/219-1/242-7/244-0/262-0/261-1/230-1/214-1/214-1/220-2/214-1/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:environment]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.callback#0@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-15/244-0/262-0/261-1/220-2/214-1/219-1/242-7/244-0/262-0/261-1/230-1/214-2/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:error]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.callback#0@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-15/244-0/262-0/261-1/220-2/214-1/219-1/242-7/244-0/262-0/261-1/230-1/214-2/214-1/220-2/219-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "219[42]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.callback#0@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-15/244-0/262-0/261-1/220-2/214-1/219-1/242-7/244-0/262-0/261-1/230-1/214-2/214-1/220-2/214-1/219-1/242-0/245-0/230-1/214-1/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 0,
+      "crap": 2
+    },
+    {
+      "identity": "module.callback#0@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-15/244-0/262-0/261-1/220-2/214-1/219-1/242-8/246-1/242-0/245-0/230-1/214-1/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 0,
+      "crap": 2
+    },
+    {
+      "identity": "module.exclusive@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-16/244-0/262-0/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[169[80:A]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.callback#0@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-18/244-0/262-0/261-1/214-1/219-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "219[42]",
+      "complexity": 6,
+      "coverage": 0.75,
+      "crap": 6.5625
+    },
+    {
+      "identity": "module.callback#0@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-19/244-0/262-0/261-1/214-0/212-0/214-1/219-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "219[42]",
+      "complexity": 10,
+      "coverage": 0.6666666666666666,
+      "crap": 13.703703703703706
+    },
+    {
+      "identity": "module.callback#0@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-19/244-0/262-0/261-1/214-0/212-0/214-1/214-1/219-1/242-5/244-0/262-0/261-1/230-1/214-1/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:error]]",
+      "complexity": 2,
+      "coverage": 1,
+      "crap": 2
+    },
+    {
+      "identity": "object.callback#0@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-19/244-0/262-0/261-1/214-0/212-0/214-1/214-1/219-1/242-8/244-0/262-0/261-1/230-1/214-1/211-0/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 0,
+      "crap": 2
+    },
+    {
+      "identity": "object.callback#0@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-19/244-0/262-0/261-1/214-0/212-0/214-1/214-1/219-1/242-8/244-0/262-0/261-1/230-1/214-1/211-1/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 0,
+      "crap": 2
+    },
+    {
+      "identity": "module.callback#0@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-19/244-0/262-0/261-1/214-0/212-0/214-1/214-1/219-1/242-11/244-0/262-0/261-1/230-1/214-1/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 0,
+      "crap": 2
+    },
+    {
+      "identity": "module.callback#0@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-19/244-0/262-0/261-1/214-1/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:error]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.callback#0@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-19/244-0/262-0/261-1/214-1/214-1/220-2/219-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "219[42]",
+      "complexity": 5,
+      "coverage": 1,
+      "crap": 5
+    },
+    {
+      "identity": "module.callback#0@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-19/244-0/262-0/261-1/214-1/214-1/220-2/214-1/219-1/242-0/246-1/242-1/246-1/245-0/230-1/214-1/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 0,
+      "crap": 2
+    },
+    {
+      "identity": "module.callback#0@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-20/244-0/262-0/261-1/214-1/219-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "219[42]",
+      "complexity": 3,
+      "coverage": 1,
+      "crap": 3
+    },
+    {
+      "identity": "module.callback#0@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-20/244-0/262-0/261-1/214-1/214-1/219-1/242-6/246-1/245-0/230-1/214-1/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 0,
+      "crap": 2
+    },
+    {
+      "identity": "object.callback#0@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-21/244-0/262-0/261-2/211-5/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[169[80:A]]",
+      "complexity": 1,
+      "coverage": 0,
+      "crap": 2
+    },
+    {
+      "identity": "module.callback#0@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-22/245-0/230-1/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.callback#0@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-22/245-0/230-1/214-1/220-1/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.callback#0@308-26/263-5/242-0/254-0/214-0/212-0/214-2/214-1/219-1/242-23/245-0/230-1/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "object.callback#0@308-27/244-1/262-0/261-2/211-0/220-1",
+      "file": "src/varlock/manager.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:options]]",
+      "complexity": 1,
+      "coverage": 0,
+      "crap": 2
+    },
+    {
+      "identity": "module.isVarlockErrorCode@308-6/244-0/262-0/220-1",
+      "file": "src/rpc.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:value]]",
+      "complexity": 8,
+      "coverage": 1,
+      "crap": 8
+    },
+    {
+      "identity": "module.publicMessage@308-8/244-0/262-0/220-1",
+      "file": "src/rpc.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:error]]",
+      "complexity": 8,
+      "coverage": 0.3,
+      "crap": 29.951999999999995
+    },
+    {
+      "identity": "module.sanitizeStatus@263-9",
+      "file": "src/rpc.ts",
+      "name": "sanitizeStatus",
+      "fingerprint": "263[95]",
+      "complexity": 7,
+      "coverage": 1,
+      "crap": 7
+    },
+    {
+      "identity": "object.callback#0@308-9/263-4/242-1/254-0/211-7/306-0/218-0/228-4/211-0/304-1/220-1",
+      "file": "src/rpc.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:item]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.rpcError@263-10",
+      "file": "src/rpc.ts",
+      "name": "rpcError",
+      "fingerprint": "263[95]",
+      "complexity": 1,
+      "coverage": 0,
+      "crap": 2
+    },
+    {
+      "identity": "module.errorMessage@308-5/244-0/262-0/220-1",
+      "file": "src/tui.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:error]]",
+      "complexity": 11,
+      "coverage": 0.4166666666666667,
+      "crap": 35.01793981481481
+    },
+    {
+      "identity": "module.formatStatus@263-6",
+      "file": "src/tui.ts",
+      "name": "formatStatus",
+      "fingerprint": "263[95]",
+      "complexity": 4,
+      "coverage": 0.75,
+      "crap": 4.25
+    },
+    {
+      "identity": "module.createCommands@263-7",
+      "file": "src/tui.ts",
+      "name": "createCommands",
+      "fingerprint": "263[95]",
+      "complexity": 1,
+      "coverage": 0,
+      "crap": 2
+    },
+    {
+      "identity": "module.run@308-7/263-3/242-0/244-0/262-0/220-1",
+      "file": "src/tui.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:title]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.callback#0@308-7/263-3/242-0/244-0/262-0/261-1/220-4",
+      "file": "src/tui.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[134]",
+      "complexity": 3,
+      "coverage": 1,
+      "crap": 3
+    },
+    {
+      "identity": "object.setup@308-8/278-0/214-1/175-1",
+      "file": "src/tui.ts",
+      "name": "setup",
+      "fingerprint": "175[80:setup]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "object.show@308-8/278-0/214-1/211-1/175-2/242-1/244-0/262-0/220-1",
+      "file": "src/tui.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:title]]",
+      "complexity": 1,
+      "coverage": 0.5,
+      "crap": 1.125
+    },
+    {
+      "identity": "object.callback#0@308-8/278-0/214-1/211-1/175-2/242-2/245-0/220-1",
+      "file": "src/tui.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "object.callback#0@308-8/278-0/214-1/211-1/175-2/242-2/245-0/214-1/220-1/218-0/211-2/304-1/214-1/211-0/220-1",
+      "file": "src/tui.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 0,
+      "crap": 2
+    },
+    {
+      "identity": "object.callback#0@308-8/278-0/214-1/211-1/175-2/242-2/245-0/214-1/220-1/218-0/211-2/304-1/214-1/211-1/220-1",
+      "file": "src/tui.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 0,
+      "crap": 2
+    },
+    {
+      "identity": "object.callback#0@308-8/278-0/214-1/211-1/175-2/242-2/245-0/214-1/220-1/218-0/211-2/304-1/214-1/211-2/220-1",
+      "file": "src/tui.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 0,
+      "crap": 2
+    },
+    {
+      "identity": "module.failure@308-20/244-0/262-0/220-1",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:code]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.parseUrl@308-21/244-0/262-0/220-1",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:value]]",
+      "complexity": 10,
+      "coverage": 0.6666666666666666,
+      "crap": 13.703703703703706
+    },
+    {
+      "identity": "module.isLoopback@308-22/244-0/262-0/220-1",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:address]]",
+      "complexity": 3,
+      "coverage": 1,
+      "crap": 3
+    },
+    {
+      "identity": "module.cleanHeaders@308-23/244-0/262-0/220-1",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:headers]]",
+      "complexity": 9,
+      "coverage": 0.8947368421052632,
+      "crap": 9.094474413179764
+    },
+    {
+      "identity": "module.responseHeaders@308-24/244-0/262-0/220-1",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:headers]]",
+      "complexity": 13,
+      "coverage": 0.47619047619047616,
+      "crap": 37.288845697008966
+    },
+    {
+      "identity": "module.write@308-25/244-0/262-0/220-1",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:res]]",
+      "complexity": 2,
+      "coverage": 0.75,
+      "crap": 2.0625
+    },
+    {
+      "identity": "module.callback#0@308-25/244-0/262-0/261-1/220-5/242-1/254-0/220-1",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:resolve]]",
+      "complexity": 1,
+      "coverage": 0,
+      "crap": 2
+    },
+    {
+      "identity": "module.done@308-25/244-0/262-0/261-1/220-5/242-1/254-0/215-1/220-3/242-0/244-0/262-0/220-1",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 0,
+      "crap": 2
+    },
+    {
+      "identity": "module.fail@308-25/244-0/262-0/261-1/220-5/242-1/254-0/215-1/220-3/242-1/244-0/262-0/220-1",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 0,
+      "crap": 2
+    },
+    {
+      "identity": "module.cleanup@308-25/244-0/262-0/261-1/220-5/242-1/254-0/215-1/220-3/242-2/244-0/262-0/220-1",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 0,
+      "crap": 2
+    },
+    {
+      "identity": "module.endpointRewrite@308-26/244-0/262-0/219-1",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "219[134]",
+      "complexity": 16,
+      "coverage": 1,
+      "crap": 16
+    },
+    {
+      "identity": "module.emit@308-26/244-0/262-0/261-1/219-8/242-3/244-0/262-0/220-1",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:value]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.throughProxy@308-27/244-0/262-0/220-1",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:target]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.callback#0@308-27/244-0/262-0/261-1/220-11/220-1",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:resolve]]",
+      "complexity": 5,
+      "coverage": 1,
+      "crap": 5
+    },
+    {
+      "identity": "module.fail@308-27/244-0/262-0/261-1/220-11/215-1/220-3/242-4/244-0/262-0/220-1",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 2,
+      "coverage": 0.25,
+      "crap": 3.6875
+    },
+    {
+      "identity": "module.cancel@308-27/244-0/262-0/261-1/220-11/215-1/220-3/242-5/244-0/262-0/220-1",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 2,
+      "coverage": 0.7142857142857143,
+      "crap": 2.0932944606413995
+    },
+    {
+      "identity": "module.callback#0@308-27/244-0/262-0/261-1/220-11/215-1/220-3/242-8/245-0/220-2",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 2,
+      "coverage": 0,
+      "crap": 6
+    },
+    {
+      "identity": "module.callback#0@308-27/244-0/262-0/261-1/220-11/215-1/220-3/242-9/245-0/220-2",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:response]]",
+      "complexity": 4,
+      "coverage": 0.75,
+      "crap": 4.25
+    },
+    {
+      "identity": "module.callback#0@308-27/244-0/262-0/261-1/220-11/215-1/220-3/242-9/245-0/214-2/220-3/242-2/245-0/220-2",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 2,
+      "coverage": 0,
+      "crap": 6
+    },
+    {
+      "identity": "module.callback#0@308-27/244-0/262-0/261-1/220-11/215-1/220-3/242-9/245-0/214-2/220-3/242-3/245-0/220-2",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 3,
+      "coverage": 0,
+      "crap": 12
+    },
+    {
+      "identity": "TunnelAgent.createConnection@308-27/244-0/262-0/261-1/220-11/215-1/220-3/242-9/245-0/214-2/220-3/242-3/245-0/214-2/220-1/242-0/175-2",
+      "file": "src/relay/index.ts",
+      "name": "createConnection",
+      "fingerprint": "175[164]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.callback#0@308-27/244-0/262-0/261-1/220-11/215-1/220-3/242-9/245-0/214-2/220-3/242-3/245-0/214-2/220-1/242-3/245-0/220-2",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 2,
+      "coverage": 0,
+      "crap": 6
+    },
+    {
+      "identity": "module.callback#0@308-27/244-0/262-0/261-1/220-11/215-1/220-3/242-9/245-0/214-2/220-3/242-3/245-0/214-2/220-1/242-5/245-0/220-2",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 0,
+      "crap": 2
+    },
+    {
+      "identity": "module.callback#0@308-27/244-0/262-0/261-1/220-11/215-1/220-3/242-9/245-0/214-2/220-3/242-3/245-0/214-2/220-1/242-6/245-0/220-2",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:upstreamResponse]]",
+      "complexity": 2,
+      "coverage": 1,
+      "crap": 2
+    },
+    {
+      "identity": "module.start@308-28/244-0/262-0/220-1",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:config]]",
+      "complexity": 11,
+      "coverage": 0.8,
+      "crap": 11.968
+    },
+    {
+      "identity": "module.callback#0@308-28/244-0/262-0/261-1/220-3/242-6/254-0/214-1/220-3",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:resume]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.localOrigin@308-28/244-0/262-0/261-1/220-3/242-6/254-0/214-1/214-3/220-2/242-11/244-0/262-0/220-1",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 3,
+      "coverage": 1,
+      "crap": 3
+    },
+    {
+      "identity": "module.register@308-28/244-0/262-0/261-1/220-3/242-6/254-0/214-1/214-3/220-2/242-12/244-0/262-0/220-1",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:target]]",
+      "complexity": 3,
+      "coverage": 0.7142857142857143,
+      "crap": 3.2099125364431487
+    },
+    {
+      "identity": "module.reject@308-28/244-0/262-0/261-1/220-3/242-6/254-0/214-1/214-3/220-2/242-13/244-0/262-0/220-1",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:res]]",
+      "complexity": 2,
+      "coverage": 1,
+      "crap": 2
+    },
+    {
+      "identity": "module.handle@308-28/244-0/262-0/261-1/220-3/242-6/254-0/214-1/214-3/220-2/242-14/244-0/262-0/220-1",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:req]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "object.callback#0@308-28/244-0/262-0/261-1/220-3/242-6/254-0/214-1/214-3/220-2/242-14/244-0/262-0/261-1/220-4/214-0/212-0/214-1/211-0/220-1",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[134]",
+      "complexity": 31,
+      "coverage": 0.8571428571428571,
+      "crap": 33.80174927113703
+    },
+    {
+      "identity": "object.cancel@308-28/244-0/262-0/261-1/220-3/242-6/254-0/214-1/214-3/220-2/242-14/244-0/262-0/261-1/220-4/214-0/212-0/214-1/211-0/304-1/220-2/242-15/244-0/262-0/220-1",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 3,
+      "coverage": 0.3333333333333333,
+      "crap": 5.666666666666668
+    },
+    {
+      "identity": "object.resetBodyTimer@308-28/244-0/262-0/261-1/220-3/242-6/254-0/214-1/214-3/220-2/242-14/244-0/262-0/261-1/220-4/214-0/212-0/214-1/211-0/304-1/220-2/242-22/244-0/262-0/220-1",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 3,
+      "coverage": 1,
+      "crap": 3
+    },
+    {
+      "identity": "object.callback#0@308-28/244-0/262-0/261-1/220-3/242-6/254-0/214-1/214-3/220-2/242-14/244-0/262-0/261-1/220-4/214-0/212-0/214-1/211-0/304-1/220-2/242-22/244-0/262-0/261-1/220-1/242-1/245-0/227-2/220-1",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 0,
+      "crap": 2
+    },
+    {
+      "identity": "object.callback#0@308-28/244-0/262-0/261-1/220-3/242-6/254-0/214-1/214-3/220-2/242-14/244-0/262-0/261-1/220-4/214-0/212-0/214-1/211-0/304-1/220-2/242-24/245-0/220-2",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:chunk]]",
+      "complexity": 3,
+      "coverage": 0.5,
+      "crap": 4.125
+    },
+    {
+      "identity": "object.callback#0@308-28/244-0/262-0/261-1/220-3/242-6/254-0/214-1/214-3/220-2/242-14/244-0/262-0/261-1/220-4/214-0/212-0/214-1/211-0/304-1/220-2/242-25/245-0/220-2",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 2,
+      "coverage": 1,
+      "crap": 2
+    },
+    {
+      "identity": "object.callback#0@308-28/244-0/262-0/261-1/220-3/242-6/254-0/214-1/214-3/220-2/242-14/244-0/262-0/261-1/220-4/214-0/212-0/214-1/211-0/304-1/220-2/242-26/245-0/220-2",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:cause]]",
+      "complexity": 1,
+      "coverage": 0,
+      "crap": 2
+    },
+    {
+      "identity": "object.callback#0@308-28/244-0/262-0/261-1/220-3/242-6/254-0/214-1/214-3/220-2/242-14/244-0/262-0/261-1/220-4/214-0/212-0/214-1/211-0/304-1/220-2/242-28/259-0/242-0/244-0/262-0/261-1/224-0/214-5/214-2/214-1/220-1",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[208[209[80:k]]]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "object.callback#0@308-28/244-0/262-0/261-1/220-3/242-6/254-0/214-1/214-3/220-2/242-14/244-0/262-0/261-1/220-4/214-0/212-0/214-1/211-0/304-1/220-2/242-28/259-0/242-1/245-0/220-2",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "object.callback#0@308-28/244-0/262-0/261-1/220-3/242-6/254-0/214-1/214-3/220-2/242-14/244-0/262-0/261-1/220-4/214-0/212-0/214-1/211-0/304-1/220-2/242-28/259-0/242-12/251-2/211-0/220-1",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "object.callback#0@308-28/244-0/262-0/261-1/220-3/242-6/254-0/214-1/214-3/220-2/242-14/244-0/262-0/261-1/220-4/214-0/212-0/214-1/211-1/220-1",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 0,
+      "crap": 2
+    },
+    {
+      "identity": "module.callback#0@308-28/244-0/262-0/261-1/220-3/242-6/254-0/214-1/214-3/220-2/242-14/244-0/262-0/261-1/220-4/214-2/220-1",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 0,
+      "crap": 2
+    },
+    {
+      "identity": "module.callback#0@308-28/244-0/262-0/261-1/220-3/242-6/254-0/214-1/214-3/220-2/242-15/245-0/227-2/220-1",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:req]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.callback#0@308-28/244-0/262-0/261-1/220-3/242-6/254-0/214-1/214-3/220-2/242-17/245-0/220-2",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:socket]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.callback#0@308-28/244-0/262-0/261-1/220-3/242-6/254-0/214-1/214-3/220-2/242-17/245-0/214-2/220-2/242-1/245-0/220-2",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.callback#0@308-28/244-0/262-0/261-1/220-3/242-6/254-0/214-1/214-3/220-2/242-18/245-0/220-2",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 2,
+      "coverage": 0,
+      "crap": 6
+    },
+    {
+      "identity": "module.callback#0@308-28/244-0/262-0/261-1/220-3/242-6/254-0/214-1/214-3/220-2/242-19/245-0/220-3",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 3,
+      "coverage": 0.7142857142857143,
+      "crap": 3.2099125364431487
+    },
+    {
+      "identity": "module.callback#0@308-28/244-0/262-0/261-1/220-3/242-6/254-0/214-1/214-3/220-2/242-19/245-0/214-3/220-1/242-4/244-0/262-0/261-1/220-1",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 4,
+      "coverage": 0.75,
+      "crap": 4.25
+    },
+    {
+      "identity": "object.callback#0@308-28/244-0/262-0/261-1/220-3/242-6/254-0/214-1/214-3/220-2/242-19/245-0/214-3/220-1/242-4/244-0/262-0/261-1/214-1/220-1/242-4/254-0/214-0/212-0/214-1/211-0/220-1",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "object.callback#0@308-28/244-0/262-0/261-1/220-3/242-6/254-0/214-1/214-3/220-2/242-19/245-0/214-3/220-1/242-4/244-0/262-0/261-1/214-1/220-1/242-4/254-0/214-0/212-0/214-1/211-0/304-1/220-1/220-2",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:resolve]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "object.callback#0@308-28/244-0/262-0/261-1/220-3/242-6/254-0/214-1/214-3/220-2/242-19/245-0/214-3/220-1/242-4/244-0/262-0/261-1/214-1/220-1/242-4/254-0/214-0/212-0/214-1/211-0/304-1/220-1/215-2/220-2/220-1",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "object.callback#0@308-28/244-0/262-0/261-1/220-3/242-6/254-0/214-1/214-3/220-2/242-19/245-0/214-3/220-1/242-4/244-0/262-0/261-1/214-1/220-1/242-4/254-0/214-0/212-0/214-1/211-1/220-1",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 0,
+      "crap": 2
+    },
+    {
+      "identity": "object.callback#0@308-28/244-0/262-0/261-1/220-3/242-6/254-0/214-1/214-3/220-2/242-19/245-0/214-3/220-1/242-5/245-0/214-1/214-1/211-2/304-1/220-1",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 2,
+      "coverage": 0,
+      "crap": 6
+    },
+    {
+      "identity": "module.callback#0@308-28/244-0/262-0/261-1/220-3/242-6/254-0/214-1/214-3/220-2/242-20/254-0/220-1",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 3,
+      "coverage": 0,
+      "crap": 12
+    },
+    {
+      "identity": "module.callback#0@308-28/244-0/262-0/261-1/220-3/242-6/254-0/220-2",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:relay]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.callback#0@308-28/244-0/262-0/261-1/220-3/242-6/254-0/214-2/220-2/214-1/220-1",
+      "file": "src/relay/index.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 0,
+      "crap": 2
+    },
+    {
+      "identity": "module.isRecord@308-18/244-0/262-0/220-1",
+      "file": "src/options.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:value]]",
+      "complexity": 3,
+      "coverage": 1,
+      "crap": 3
+    },
+    {
+      "identity": "module.positiveInteger@308-19/244-0/262-0/220-1",
+      "file": "src/options.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:value]]",
+      "complexity": 7,
+      "coverage": 0.75,
+      "crap": 7.765625
+    },
+    {
+      "identity": "module.stringArray@308-20/244-0/262-0/220-1",
+      "file": "src/options.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:value]]",
+      "complexity": 4,
+      "coverage": 1,
+      "crap": 4
+    },
+    {
+      "identity": "module.callback#0@308-20/244-0/262-0/261-1/220-3/242-0/246-0/227-2/220-1",
+      "file": "src/options.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:item]]",
+      "complexity": 2,
+      "coverage": 1,
+      "crap": 2
+    },
+    {
+      "identity": "module.unsafeName@308-21/244-0/262-0/220-1",
+      "file": "src/options.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:value]]",
+      "complexity": 3,
+      "coverage": 1,
+      "crap": 3
+    },
+    {
+      "identity": "module.environmentName@308-22/244-0/262-0/220-1",
+      "file": "src/options.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:value]]",
+      "complexity": 6,
+      "coverage": 1,
+      "crap": 6
+    },
+    {
+      "identity": "module.normalizeServer@263-23",
+      "file": "src/options.ts",
+      "name": "normalizeServer",
+      "fingerprint": "263[80:normalizeServer]",
+      "complexity": 9,
+      "coverage": 0.8888888888888888,
+      "crap": 9.11111111111111
+    },
+    {
+      "identity": "module.callback#0@308-23/263-4/242-3/246-1/242-0/244-0/262-0/261-1/220-1",
+      "file": "src/options.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:key]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.cleanHeaderPart@263-24",
+      "file": "src/options.ts",
+      "name": "cleanHeaderPart",
+      "fingerprint": "263[80:cleanHeaderPart]",
+      "complexity": 5,
+      "coverage": 1,
+      "crap": 5
+    },
+    {
+      "identity": "module.normalizeRemoteServer@263-25",
+      "file": "src/options.ts",
+      "name": "normalizeRemoteServer",
+      "fingerprint": "263[80:normalizeRemoteServer]",
+      "complexity": 15,
+      "coverage": 0.8636363636363636,
+      "crap": 15.570529676934635
+    },
+    {
+      "identity": "module.parseOptions@263-26",
+      "file": "src/options.ts",
+      "name": "parseOptions",
+      "fingerprint": "263[95]",
+      "complexity": 27,
+      "coverage": 1,
+      "crap": 27
+    },
+    {
+      "identity": "module.callback#0@308-26/263-5/242-2/244-0/262-0/261-1/228-4/228-4/214-0/220-0",
+      "file": "src/options.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.callback#0@308-26/263-5/242-3/244-0/262-0/261-1/228-4/214-0/220-0",
+      "file": "src/options.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 4,
+      "coverage": 1,
+      "crap": 4
+    },
+    {
+      "identity": "module.callback#0@308-26/263-5/242-11/244-0/262-0/261-1/228-4/228-4/214-0/220-0",
+      "file": "src/options.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.callback#0@308-26/263-5/242-12/244-0/262-0/261-1/228-4/228-4/214-0/220-0",
+      "file": "src/options.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.managerOptions@263-27",
+      "file": "src/options.ts",
+      "name": "managerOptions",
+      "fingerprint": "263[95]",
+      "complexity": 2,
+      "coverage": 1,
+      "crap": 2
+    },
+    {
+      "identity": "module.callback#0@308-27/263-5/242-0/244-0/262-0/261-1/210-0/231-0/215-1/220-1",
+      "file": "src/options.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:mapping]]",
+      "complexity": 2,
+      "coverage": 1,
+      "crap": 2
+    },
+    {
+      "identity": "module.callback#0@308-27/263-5/242-0/244-0/262-0/261-1/210-0/231-0/215-1/214-1/220-2/242-0/246-1/242-0/254-0/220-1",
+      "file": "src/options.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:header]]",
+      "complexity": 2,
+      "coverage": 1,
+      "crap": 2
+    },
+    {
+      "identity": "module.isRemoteProtectionValue@263-28",
+      "file": "src/options.ts",
+      "name": "isRemoteProtectionValue",
+      "fingerprint": "263[80:isRemoteProtectionValue]",
+      "complexity": 3,
+      "coverage": 1,
+      "crap": 3
+    },
+    {
+      "identity": "module.diagnostic@308-15/244-0/262-0/220-1",
+      "file": "src/remote.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:server]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.isRemoteProtection@263-16",
+      "file": "src/remote.ts",
+      "name": "isRemoteProtection",
+      "fingerprint": "263[95]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.sourceEnvironmentKeys@263-17",
+      "file": "src/remote.ts",
+      "name": "sourceEnvironmentKeys",
+      "fingerprint": "263[95]",
+      "complexity": 2,
+      "coverage": 0,
+      "crap": 6
+    },
+    {
+      "identity": "module.callback#0@308-17/263-4/242-1/254-0/220-1",
+      "file": "src/remote.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:value]]",
+      "complexity": 2,
+      "coverage": 0,
+      "crap": 6
+    },
+    {
+      "identity": "module.validateRemoteUrl@263-18",
+      "file": "src/remote.ts",
+      "name": "validateRemoteUrl",
+      "fingerprint": "263[95]",
+      "complexity": 8,
+      "coverage": 0.875,
+      "crap": 8.125
+    },
+    {
+      "identity": "module.unsafeNetworkHost@263-19",
+      "file": "src/remote.ts",
+      "name": "unsafeNetworkHost",
+      "fingerprint": "263[80:unsafeNetworkHost]",
+      "complexity": 17,
+      "coverage": 0.8181818181818182,
+      "crap": 18.737039819684448
+    },
+    {
+      "identity": "module.mappingHeaderNames@263-20",
+      "file": "src/remote.ts",
+      "name": "mappingHeaderNames",
+      "fingerprint": "263[80:mappingHeaderNames]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.callback#0@308-20/263-3/242-0/254-0/215-1/220-1",
+      "file": "src/remote.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:name]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.safeForwardHeaders@263-21",
+      "file": "src/remote.ts",
+      "name": "safeForwardHeaders",
+      "fingerprint": "263[95]",
+      "complexity": 12,
+      "coverage": 0.9166666666666666,
+      "crap": 12.083333333333334
+    },
+    {
+      "identity": "module.placeholderHeaders@263-22",
+      "file": "src/remote.ts",
+      "name": "placeholderHeaders",
+      "fingerprint": "263[80:placeholderHeaders]",
+      "complexity": 6,
+      "coverage": 0.875,
+      "crap": 6.0703125
+    },
+    {
+      "identity": "module.readProxyAndCa@263-23",
+      "file": "src/remote.ts",
+      "name": "readProxyAndCa",
+      "fingerprint": "263[80:readProxyAndCa]",
+      "complexity": 10,
+      "coverage": 0.75,
+      "crap": 11.5625
+    },
+    {
+      "identity": "module.makeRemoteRelayCoordinator@263-25",
+      "file": "src/remote.ts",
+      "name": "makeRemoteRelayCoordinator",
+      "fingerprint": "263[95]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.stop@308-25/263-5/242-2/244-0/262-0/220-1",
+      "file": "src/remote.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:handle]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.callback#0@308-25/263-5/242-2/244-0/262-0/261-1/220-2/214-1/220-1",
+      "file": "src/remote.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 0,
+      "crap": 2
+    },
+    {
+      "identity": "module.reconcile@308-25/263-5/242-3/244-0/262-0/220-1",
+      "file": "src/remote.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:servers]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.callback#0@308-25/263-5/242-3/244-0/262-0/261-1/220-5/219-1",
+      "file": "src/remote.ts",
+      "name": "<anonymous>",
+      "fingerprint": "219[42]",
+      "complexity": 27,
+      "coverage": 0.5681818181818182,
+      "crap": 85.69894581141996
+    },
+    {
+      "identity": "module.callback#0@308-25/263-5/242-3/244-0/262-0/261-1/220-5/214-1/219-1/242-1/251-2/242-13/244-0/262-0/261-1/230-1/214-1/220-1",
+      "file": "src/remote.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:handle]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.callback#0@308-25/263-5/242-3/244-0/262-0/261-1/220-5/214-1/219-1/242-1/251-2/242-13/244-0/262-0/261-1/230-1/214-2/220-1",
+      "file": "src/remote.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "object.handles@308-25/263-5/242-4/254-0/178-0",
+      "file": "src/remote.ts",
+      "name": "handles",
+      "fingerprint": "178[80:handles]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "object.callback#0@308-25/263-5/242-4/254-0/211-0/178-1/242-0/254-0/215-1/220-1",
+      "file": "src/remote.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[208[209[80:name]]]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "object.diagnostics@308-25/263-5/242-4/254-0/178-1",
+      "file": "src/remote.ts",
+      "name": "diagnostics",
+      "fingerprint": "178[80:diagnostics]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "object.health@308-25/263-5/242-4/254-0/178-3",
+      "file": "src/remote.ts",
+      "name": "health",
+      "fingerprint": "178[80:health]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "object.callback#0@308-25/263-5/242-4/254-0/211-3/178-1/242-0/254-0/220-1",
+      "file": "src/remote.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "object.callback#0@308-25/263-5/242-4/254-0/211-3/178-1/242-0/254-0/214-1/220-1/214-0/212-0/220-2",
+      "file": "src/remote.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:record]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "object.callback#0@308-25/263-5/242-4/254-0/211-3/178-1/242-0/254-0/214-1/220-1/214-0/212-0/214-2/220-2/214-1/220-1",
+      "file": "src/remote.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:value]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "object.callback#0@308-25/263-5/242-4/254-0/211-3/178-1/242-0/254-0/214-1/220-1/214-0/212-0/214-2/220-2/214-2/220-1",
+      "file": "src/remote.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 0,
+      "crap": 2
+    },
+    {
+      "identity": "object.callback#0@308-25/263-5/242-4/254-0/211-3/178-1/242-0/254-0/214-1/220-1/214-1/220-1",
+      "file": "src/remote.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:values]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "object.callback#0@308-25/263-5/242-4/254-0/211-4/304-1/220-1",
+      "file": "src/remote.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "object.callback#0@308-25/263-5/242-4/254-0/211-4/304-1/214-1/220-1/214-0/212-0/220-2",
+      "file": "src/remote.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:record]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "object.callback#0@308-25/263-5/242-4/254-0/211-4/304-1/214-1/220-1/214-1/220-1",
+      "file": "src/remote.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "object.callback#0@308-25/263-5/242-4/254-0/211-4/304-1/214-1/220-1/214-1/214-1/220-1/220-1",
+      "file": "src/remote.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.applyProtection@263-9",
+      "file": "src/plugin.ts",
+      "name": "applyProtection",
+      "fingerprint": "263[95]",
+      "complexity": 7,
+      "coverage": 0.8571428571428571,
+      "crap": 7.142857142857143
+    },
+    {
+      "identity": "module.callback#0@308-9/263-6/242-0/251-2/242-2/246-1/242-1/245-0/220-2",
+      "file": "src/plugin.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:config]]",
+      "complexity": 7,
+      "coverage": 0.8181818181818182,
+      "crap": 7.294515401953419
+    },
+    {
+      "identity": "module.callback#0@308-9/263-6/242-0/251-2/242-3/246-1/242-0/245-0/220-2",
+      "file": "src/plugin.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:config]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.callback#0@308-9/263-6/242-0/251-2/242-7/245-0/220-2",
+      "file": "src/plugin.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:config]]",
+      "complexity": 5,
+      "coverage": 0.7777777777777778,
+      "crap": 5.274348422496571
+    },
+    {
+      "identity": "module.ensureState@308-10/244-0/262-0/220-1",
+      "file": "src/plugin.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:manager]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.callback#0@308-10/244-0/262-0/261-1/220-2/214-0/212-0/214-1/219-1",
+      "file": "src/plugin.ts",
+      "name": "<anonymous>",
+      "fingerprint": "219[42]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "module.callback#0@308-10/244-0/262-0/261-1/220-2/214-1/220-1",
+      "file": "src/plugin.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:error]]",
+      "complexity": 1,
+      "coverage": 0,
+      "crap": 2
+    },
+    {
+      "identity": "module.callback#0@308-10/244-0/262-0/261-1/220-2/214-1/214-1/220-2/214-1/220-1",
+      "file": "src/plugin.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:status]]",
+      "complexity": 1,
+      "coverage": 0,
+      "crap": 2
+    },
+    {
+      "identity": "module.snapshotServers@263-11",
+      "file": "src/plugin.ts",
+      "name": "snapshotServers",
+      "fingerprint": "263[80:snapshotServers]",
+      "complexity": 9,
+      "coverage": 0.8333333333333334,
+      "crap": 9.375
+    },
+    {
+      "identity": "module.makePlugin@263-12",
+      "file": "src/plugin.ts",
+      "name": "makePlugin",
+      "fingerprint": "263[95]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "object.callback#0@308-12/263-5/242-0/254-0/214-1/211-1/220-1",
+      "file": "src/plugin.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:ctx]]",
+      "complexity": 2,
+      "coverage": 0.75,
+      "crap": 2.0625
+    },
+    {
+      "identity": "object.callback#0@308-12/263-5/242-0/254-0/214-1/211-1/304-1/220-2/242-2/244-0/262-0/261-1/219-1",
+      "file": "src/plugin.ts",
+      "name": "<anonymous>",
+      "fingerprint": "219[42]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "object.setState@308-12/263-5/242-0/254-0/214-1/211-1/304-1/220-2/242-2/244-0/262-0/261-1/214-1/219-1/242-7/244-0/262-0/220-1",
+      "file": "src/plugin.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:next]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "object.publicStatus@308-12/263-5/242-0/254-0/214-1/211-1/304-1/220-2/242-2/244-0/262-0/261-1/214-1/219-1/242-8/244-0/262-0/220-1",
+      "file": "src/plugin.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:status]]",
+      "complexity": 2,
+      "coverage": 1,
+      "crap": 2
+    },
+    {
+      "identity": "object.reconcileRemote@308-12/263-5/242-0/254-0/214-1/211-1/304-1/220-2/242-2/244-0/262-0/261-1/214-1/219-1/242-9/244-0/262-0/220-1",
+      "file": "src/plugin.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:status]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "object.callback#0@308-12/263-5/242-0/254-0/214-1/211-1/304-1/220-2/242-2/244-0/262-0/261-1/214-1/219-1/242-9/244-0/262-0/261-1/220-3/219-1",
+      "file": "src/plugin.ts",
+      "name": "<anonymous>",
+      "fingerprint": "219[42]",
+      "complexity": 3,
+      "coverage": 0.8888888888888888,
+      "crap": 3.0123456790123457
+    },
+    {
+      "identity": "object.callback#0@308-12/263-5/242-0/254-0/214-1/211-1/304-1/220-2/242-2/244-0/262-0/261-1/214-1/219-1/242-10/245-0/230-1/220-1",
+      "file": "src/plugin.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:editor]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "object.callback#0@308-12/263-5/242-0/254-0/214-1/211-1/304-1/220-2/242-2/244-0/262-0/261-1/214-1/219-1/242-15/245-0/230-1/214-2/211-0/220-1",
+      "file": "src/plugin.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 0,
+      "crap": 2
+    },
+    {
+      "identity": "object.callback#0@308-12/263-5/242-0/254-0/214-1/211-1/304-1/220-2/242-2/244-0/262-0/261-1/214-1/219-1/242-15/245-0/230-1/214-2/211-1/220-1",
+      "file": "src/plugin.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:_]]",
+      "complexity": 1,
+      "coverage": 0,
+      "crap": 2
+    },
+    {
+      "identity": "object.callback#0@308-12/263-5/242-0/254-0/214-1/211-1/304-1/220-2/242-2/244-0/262-0/261-1/214-1/219-1/242-15/245-0/230-1/214-2/211-1/304-1/220-3/214-1/214-0/212-0/219-1",
+      "file": "src/plugin.ts",
+      "name": "<anonymous>",
+      "fingerprint": "219[42]",
+      "complexity": 1,
+      "coverage": 0,
+      "crap": 2
+    },
+    {
+      "identity": "object.callback#0@308-12/263-5/242-0/254-0/214-1/211-1/304-1/220-2/242-2/244-0/262-0/261-1/214-1/219-1/242-15/245-0/230-1/214-2/211-1/304-1/220-3/214-1/214-1/220-1",
+      "file": "src/plugin.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:error]]",
+      "complexity": 1,
+      "coverage": 0,
+      "crap": 2
+    },
+    {
+      "identity": "object.callback#0@308-12/263-5/242-0/254-0/214-1/211-1/304-1/220-2/242-2/244-0/262-0/261-1/214-1/219-1/242-15/245-0/230-1/214-2/211-1/304-1/220-3/214-1/214-1/214-1/220-2/214-0/212-0/220-1",
+      "file": "src/plugin.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 0,
+      "crap": 2
+    },
+    {
+      "identity": "object.callback#0@308-12/263-5/242-0/254-0/214-1/211-1/304-1/220-2/242-2/244-0/262-0/261-1/214-1/219-1/242-15/245-0/230-1/214-2/211-2/220-1",
+      "file": "src/plugin.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:_]]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "object.callback#0@308-12/263-5/242-0/254-0/214-1/211-1/304-1/220-2/242-2/244-0/262-0/261-1/214-1/219-1/242-15/245-0/230-1/214-2/211-2/304-1/220-3/214-1/214-0/212-0/219-1",
+      "file": "src/plugin.ts",
+      "name": "<anonymous>",
+      "fingerprint": "219[42]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "object.callback#0@308-12/263-5/242-0/254-0/214-1/211-1/304-1/220-2/242-2/244-0/262-0/261-1/214-1/219-1/242-15/245-0/230-1/214-2/211-2/304-1/220-3/214-1/214-1/220-1",
+      "file": "src/plugin.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[170[80:error]]",
+      "complexity": 1,
+      "coverage": 0,
+      "crap": 2
+    },
+    {
+      "identity": "object.callback#0@308-12/263-5/242-0/254-0/214-1/211-1/304-1/220-2/242-2/244-0/262-0/261-1/214-1/219-1/242-16/245-0/230-1/214-1/214-0/212-0/214-1/219-1",
+      "file": "src/plugin.ts",
+      "name": "<anonymous>",
+      "fingerprint": "219[42]",
+      "complexity": 8,
+      "coverage": 0,
+      "crap": 72
+    },
+    {
+      "identity": "object.callback#0@308-12/263-5/242-0/254-0/214-1/211-1/304-1/220-2/242-2/244-0/262-0/261-1/214-1/219-1/242-16/245-0/230-1/214-1/214-1/220-1",
+      "file": "src/plugin.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 0,
+      "crap": 2
+    },
+    {
+      "identity": "object.callback#0@308-12/263-5/242-0/254-0/214-1/211-1/304-1/220-2/242-2/244-0/262-0/261-1/214-1/219-1/242-17/245-0/230-1/220-1",
+      "file": "src/plugin.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 1,
+      "crap": 1
+    },
+    {
+      "identity": "object.callback#0@308-12/263-5/242-0/254-0/214-1/211-1/304-1/220-2/242-3/254-0/214-1/220-1",
+      "file": "src/plugin.ts",
+      "name": "<anonymous>",
+      "fingerprint": "220[39]",
+      "complexity": 1,
+      "coverage": 0,
+      "crap": 2
+    }
+  ]
+}

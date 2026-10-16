@@ -15,11 +15,14 @@ the OpenCode location and project, not to individual sessions.
 The protocol exposes only an allowlisted, sanitized subset of Varlock status
 JSON through public RPC. Do not assume that Varlock CLI output is safe to
 publish: public CLI status may contain tokens. Full proxy environments may
-contain raw passthrough values, but this plugin permits only exact,
-placeholder-matched `placeholderOverrides` entries.
+contain raw passthrough values, including transient values held in process
+memory, but this plugin permits only exact, placeholder-matched
+`placeholderOverrides` entries to cross its adapter boundary. Never log or
+publish a full environment map.
 
 Strict egress is required by the manager default and is schema-controlled. The
-local MCP path depends on the client honoring the supplied proxy environment.
+local MCP path depends on the client honoring the supplied proxy environment;
+the plugin cannot force an arbitrary local client to use that route.
 The remote relay controls its configured outbound dispatcher instead of relying
 on that client behavior, but this is not a sandbox or a claim of universal
 network isolation. A same-user process may access configured secret stores,
@@ -59,10 +62,10 @@ it is not a secret. Cleanup is scoped to resources acquired by this project
 instance and never invokes a global Varlock shutdown.
 The plugin does not mutate `process.env`.
 
-The synthetic HTTPS remote fixture and real Varlock 1.23 flow pass. This does
-not imply verification against every external MCP provider or a live OpenCode
-TUI session. Native V2 types, mocks, package imports, and synthetic live
-fixtures are covered by the project verification commands.
+Native V2 types, mocks, package imports, and synthetic HTTPS/Varlock fixtures
+are covered by the project verification commands. Opt-in fixture results do not
+constitute production certification, compatibility with every external MCP
+provider, or a fully live OpenCode host/TUI session.
 
 ## Reporting a vulnerability
 

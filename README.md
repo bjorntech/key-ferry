@@ -2,10 +2,6 @@
 
 Project-scoped Key Ferry credential proxy integration for OpenCode V2.
 
-This checkout is private and unpublished. The unscoped npm name
-`opencode-varlock` is an unrelated third-party OpenCode V1/MPL
-plugin. Use this checkout's absolute path, not that package name.
-
 ## What it protects
 
 The native Effect 4 plugin owns a project-scoped Varlock proxy process and
@@ -38,33 +34,29 @@ Direct provider/API transport protection is not included.
 - Effect 4.0.1-compatible runtime
 - Node.js 22 or newer
 - Varlock CLI 1.23.0 installed separately as `varlock`
-- A project `.env.schema` understood by Varlock
+- An installed Varlock CLI and a configured Varlock environment/schema with the
+  secrets and proxy rules your MCP servers need
+- Configure secret sources and authentication following the
+  [Varlock documentation](https://varlock.dev/)
 
 Verification has been exercised with Node 24 and Bun 1.4.2, alongside the
 native OpenCode V2 package types and Effect 4.0.1.
 
-## Minimal local setup
+## Installation
 
-Build this private checkout:
-
-```sh
-bun install --frozen-lockfile
-bun run build
-```
-
-In the project OpenCode should open, add the server plugin to
-`opencode.jsonc`. Replace the absolute checkout path and illustrative MCP
-commands:
+OpenCode installs configured npm plugins automatically. Add the package to the
+global OpenCode plugin configuration (normally `~/.config/opencode/opencode.jsonc`)
+and preserve any unrelated entries already there:
 
 ```jsonc
 {
-  "$schema": "https://opencode.ai/config.json",
   "plugins": [
     {
-      "package": "/absolute/path/to/key-ferry",
+      "package": "@bjorntech/key-ferry@0.1.0",
       "options": {
         "enabled": true,
         "requireStrictEgress": true,
+        "projectDirectory": ".",
         "servers": {
           "example-local-mcp": { "env": ["FAKE_API_KEY"] },
           "example-remote-mcp": {
@@ -77,45 +69,38 @@ commands:
         }
       }
     }
-  ],
-  "mcp": {
-    "servers": {
-      "example-local-mcp": {
-        "type": "local",
-        "command": ["node", "./path/to/your-local-mcp.mjs"]
-      },
-      "example-remote-mcp": {
-        "type": "remote",
-        "url": "https://mcp.example.test/mcp",
-        "oauth": false
-      }
-    }
-  }
-}
-```
-
-The selected remote server must explicitly set `oauth: false`. This is an
-API-key relay mode, not an OAuth replacement. If `oauth` is omitted or is an
-OAuth object, the selected server is disabled with a safe diagnostic. Remove
-the Varlock mapping to leave native OAuth enabled.
-
-The package's sibling `./tui` export is discovered automatically when the
-server plugin is loaded from `opencode.json(c)`. A duplicate `cli.json` entry
-is not required. An optional global `cli.json` entry is useful only for a
-CLI-only plugin deployment or when connecting to a remote OpenCode server
-that already has this server plugin loaded:
-
-```jsonc
-{
-  "plugins": [
-    { "package": "/absolute/path/to/key-ferry" }
   ]
 }
 ```
 
-There is no project-local `cli.json` setup. Do not install the unscoped npm
-package and do not use a project-relative package path for this unpublished
-checkout.
+The package is configured globally, while `projectDirectory` and the selected
+server mappings determine which project context is protected. Unmapped MCP
+servers remain under native OpenCode behavior. A selected remote API-key server
+must explicitly set `oauth: false`; native OAuth remains unchanged for
+unselected servers.
+
+Install the Varlock CLI separately. A shared CLI installation is preferred over
+installing it in every project:
+
+```sh
+brew install dmno-dev/tap/varlock
+varlock --version
+```
+
+If Homebrew is unavailable, use the pinned Varlock 1.23.0 installer from the
+official Varlock source and ensure the resulting `varlock` executable is on
+`PATH`. The plugin does not install Varlock or unlock a secret store.
+
+The package's sibling `./tui` export is discovered automatically when the
+server plugin is loaded. Do not add a duplicate `cli.json` entry for an
+ordinary server-plugin installation. A global `cli.json` entry is only useful
+for a CLI-only deployment or a CLI connected to a remote OpenCode server that
+already loaded the server plugin.
+
+Set `projectDirectory` to the project root containing the schema, or to a
+central Varlock configuration directory such as `~/.config/key-ferry`. It does
+not need to be a Git repository. The plugin starts and owns its Varlock sidecar
+itself; do not wrap OpenCode or manually run `varlock proxy`.
 
 ## Configuration
 
@@ -150,7 +135,9 @@ names are not rejected merely because they may resolve internally.
 
 Use `examples/.env.schema` for synthetic strict-egress values only. Mark each
 remote upstream host with `@proxy(domain="...")` and keep
-`@proxyConfig={egress="strict"}`. Never commit a real secret.
+`@proxyConfig={egress="strict"}`. Configure any secret source through Varlock;
+Key Ferry does not install Varlock, create its schema, or configure provider
+authentication. Never commit a real secret.
 
 ## TUI commands
 
@@ -160,7 +147,7 @@ remote upstream host with `@proxy(domain="...")` and keep
 | `key-ferry.refresh` | `/key-ferry-refresh` | `refresh` |
 | `key-ferry.doctor` | `/key-ferry-doctor` | `doctor` |
 
-The rename is intentionally breaking for this unpublished package: no `varlock-*`
+The rename is intentionally breaking for the 0.1.0 release: no `varlock-*`
 command aliases are retained.
 
 Refresh and doctor report safe lifecycle and remote-configuration diagnostics.
@@ -199,6 +186,9 @@ bun test
 bun run build
 ```
 
+Coverage, formatter, and per-function CRAP-gate details are documented in
+[Quality checks](docs/quality.md).
+
 The two live Varlock tests are gated and skipped unless
 `VARLOCK_LIVE_BINARY` points to an absolute CLI path. It uses synthetic
 fixtures and isolated configuration. No per-test host credential or provider
@@ -209,9 +199,12 @@ VARLOCK_LIVE_BINARY=/absolute/path/to/varlock bun test tests/varlock-live.test.t
 VARLOCK_LIVE_BINARY=/absolute/path/to/varlock bun test tests/remote-varlock-live.test.ts
 ```
 
-Current local verification: `bun test` passes 53 tests with 2 gated skips.
-The gated live Varlock fixtures were not run in this rename pass.
+The normal suite and gated live fixtures are separate verification layers. Run
+the commands above as needed; do not treat the normal suite as
+certification of every external MCP provider, production deployment, or live
+OpenCode TUI session.
 
 See [Architecture](docs/architecture.md),
 [Troubleshooting](docs/troubleshooting.md), and
+[Quality checks](docs/quality.md),
 [the example configuration](examples/opencode.jsonc).

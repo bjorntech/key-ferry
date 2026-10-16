@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Schema, Scope } from "effect"
+import { Context, Effect, Layer, Schema, Scope } from "effect";
 
 /**
  * Effect-native contracts shared by the Key Ferry sidecar manager and OpenCode
@@ -8,15 +8,9 @@ import { Context, Effect, Layer, Schema, Scope } from "effect"
  * returned by status, RPC, logs, or model-visible tool output.
  */
 
-export type ProjectDirectory = string & { readonly __projectDirectory: unique symbol }
+export type ProjectDirectory = string & { readonly __projectDirectory: unique symbol };
 
-export type ManagerPhase =
-  | "stopped"
-  | "starting"
-  | "ready"
-  | "degraded"
-  | "failed"
-  | "stopping"
+export type ManagerPhase = "stopped" | "starting" | "ready" | "degraded" | "failed" | "stopping";
 
 export type VarlockErrorCode =
   | "invalid_config"
@@ -26,7 +20,7 @@ export type VarlockErrorCode =
   | "not_ready"
   | "disposed"
   | "protocol_error"
-  | "timeout"
+  | "timeout";
 
 /** Tagged and already-sanitized error safe for public diagnostics. */
 export class VarlockError extends Schema.TaggedError<VarlockError>()("Varlock.Error", {
@@ -46,28 +40,28 @@ export class VarlockError extends Schema.TaggedError<VarlockError>()("Varlock.Er
 
 /** Safe to return from status RPCs or display to a user. */
 export interface SafeStatus {
-  readonly phase: ManagerPhase
-  readonly projectDirectory: ProjectDirectory
-  readonly generation: number
-  readonly pid?: number
-  readonly endpoint?: string
-  readonly lastRefreshAt?: string
-  readonly error?: VarlockError
-  readonly diagnostics?: readonly SafeDiagnostic[]
+  readonly phase: ManagerPhase;
+  readonly projectDirectory: ProjectDirectory;
+  readonly generation: number;
+  readonly pid?: number;
+  readonly endpoint?: string;
+  readonly lastRefreshAt?: string;
+  readonly error?: VarlockError;
+  readonly diagnostics?: readonly SafeDiagnostic[];
 }
 
 /** Secret-free configuration diagnostics surfaced to RPC/TUI consumers. */
 export interface SafeDiagnostic {
-  readonly code: string
-  readonly server: string
-  readonly message: string
+  readonly code: string;
+  readonly server: string;
+  readonly message: string;
 }
 
 /**
  * Secret-bearing values are deliberately separate from SafeStatus. This type
  * is for internal process/proxy wiring only and must not cross an RPC boundary.
  */
-export type ResolvedEnvironment = Readonly<Record<string, string>>
+export type ResolvedEnvironment = Readonly<Record<string, string>>;
 
 /**
  * A manager is location/project scoped. Every mutating operation is required
@@ -75,25 +69,25 @@ export type ResolvedEnvironment = Readonly<Record<string, string>>
  * interruption. Implementations must never mutate global process.env.
  */
 export interface ProjectKeyFerryManagerService {
-  readonly status: Effect.Effect<SafeStatus>
+  readonly status: Effect.Effect<SafeStatus>;
 
   /** Start or reuse the manager-owned process, failing closed if not ready. */
-  readonly ensureStarted: Effect.Effect<SafeStatus, VarlockError>
+  readonly ensureStarted: Effect.Effect<SafeStatus, VarlockError>;
 
   /** Internal-only environment capability for a child process or proxy. */
-  readonly environment: Effect.Effect<ResolvedEnvironment, VarlockError>
+  readonly environment: Effect.Effect<ResolvedEnvironment, VarlockError>;
 
   /** Re-resolve and atomically apply values; failures leave the connection closed. */
-  readonly refresh: Effect.Effect<SafeStatus, VarlockError>
+  readonly refresh: Effect.Effect<SafeStatus, VarlockError>;
 
   /** Idempotent teardown of only the process and resources this manager owns. */
-  readonly dispose: Effect.Effect<void>
+  readonly dispose: Effect.Effect<void>;
 
   /**
    * Serializes lifecycle and refresh operations. Implementations should back
    * this with an internal Semaphore and reject work after disposal.
    */
-  readonly withExclusive: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
+  readonly withExclusive: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
 }
 
 /** Native Effect service tag used by the manager and plugin layers. */
@@ -103,13 +97,13 @@ export class ProjectKeyFerryManager extends Context.Service<
 >()("key-ferry/ProjectKeyFerryManager") {}
 
 export interface ProjectKeyFerryManagerOptions {
-  readonly projectDirectory: ProjectDirectory
+  readonly projectDirectory: ProjectDirectory;
   /** Stable diagnostic label only, never a credential or secret. */
-  readonly owner?: string
+  readonly owner?: string;
   /** Adapter-specific non-secret options, pending Varlock protocol finalization. */
-  readonly adapter?: Readonly<Record<string, unknown>>
+  readonly adapter?: Readonly<Record<string, unknown>>;
   /** Optional explicit owned session identifier; omitted for owned-only MVP. */
-  readonly sessionID?: string
+  readonly sessionID?: string;
 }
 
 /**
@@ -120,49 +114,47 @@ export interface ProjectKeyFerryManagerOptions {
 export interface ProjectKeyFerryManagerFactory<R = never> {
   readonly layer: (
     options: ProjectKeyFerryManagerOptions,
-  ) => Layer.Layer<ProjectKeyFerryManager, VarlockError, R>
+  ) => Layer.Layer<ProjectKeyFerryManager, VarlockError, R>;
 }
 
 /** Public plugin options. Values are configuration, never resolved secrets. */
 export interface KeyFerryPluginOptions {
-  readonly enabled?: boolean
-  readonly projectDirectory?: string
-  readonly adapter?: Readonly<Record<string, unknown>>
+  readonly enabled?: boolean;
+  readonly projectDirectory?: string;
+  readonly adapter?: Readonly<Record<string, unknown>>;
 }
 
 /** Runtime service dependencies for an injectable process implementation. */
 export interface VarlockProcessService {
-  readonly spawn: (
-    input: VarlockProcessSpawn,
-  ) => Effect.Effect<VarlockProcessHandle, VarlockError>
+  readonly spawn: (input: VarlockProcessSpawn) => Effect.Effect<VarlockProcessHandle, VarlockError>;
   readonly send: (
     handle: VarlockProcessHandle,
     input: VarlockProcessCommand,
-  ) => Effect.Effect<VarlockProcessResult, VarlockError>
-  readonly stop: (handle: VarlockProcessHandle) => Effect.Effect<void, VarlockError>
+  ) => Effect.Effect<VarlockProcessResult, VarlockError>;
+  readonly stop: (handle: VarlockProcessHandle) => Effect.Effect<void, VarlockError>;
 }
 
 export interface VarlockProcessSpawn {
-  readonly command: readonly string[]
-  readonly cwd: ProjectDirectory
-  readonly sessionID: string
-  readonly allowReload: true
+  readonly command: readonly string[];
+  readonly cwd: ProjectDirectory;
+  readonly sessionID: string;
+  readonly allowReload: true;
 }
 
 export interface VarlockProcessHandle {
-  readonly pid: number
-  readonly sessionID: string
-  readonly ownershipID: string
+  readonly pid: number;
+  readonly sessionID: string;
+  readonly ownershipID: string;
 }
 
 export type VarlockProcessCommand =
   | { readonly type: "status" }
   | { readonly type: "environment"; readonly names: readonly string[] }
-  | { readonly type: "refresh" }
+  | { readonly type: "refresh" };
 
 export interface VarlockProcessResult {
   /** Raw protocol data stays inside the Varlock adapter. */
-  readonly value: unknown
+  readonly value: unknown;
 }
 
 export class VarlockProcess extends Context.Service<VarlockProcess, VarlockProcessService>()(
@@ -171,8 +163,8 @@ export class VarlockProcess extends Context.Service<VarlockProcess, VarlockProce
 
 /** Explicit brand constructor used at configuration boundaries. */
 export function projectDirectory(value: string): ProjectDirectory {
-  if (value.length === 0) throw new TypeError("project directory must not be empty")
-  return value as ProjectDirectory
+  if (value.length === 0) throw new TypeError("project directory must not be empty");
+  return value as ProjectDirectory;
 }
 
 /**
@@ -180,4 +172,8 @@ export function projectDirectory(value: string): ProjectDirectory {
  * the intended lifetime without forcing callers to expose implementation
  * details or Promise wrappers.
  */
-export type ScopedManagerLayer<R = never> = Layer.Layer<ProjectKeyFerryManager, VarlockError, R | Scope.Scope>
+export type ScopedManagerLayer<R = never> = Layer.Layer<
+  ProjectKeyFerryManager,
+  VarlockError,
+  R | Scope.Scope
+>;

@@ -2,8 +2,9 @@
   "$schema": "https://opencode.ai/config.json",
   "plugins": [
     {
-      // This project is unpublished. Use the absolute path to this checkout.
-      "package": "/absolute/path/to/key-ferry",
+      // Merge this entry into your existing config; preserve unrelated
+      // plugins and MCP servers.
+      "package": "@bjorntech/key-ferry@0.1.0",
       "options": {
         "enabled": true,
         "projectDirectory": ".",
@@ -13,31 +14,31 @@
         "requireStrictEgress": true,
         "servers": {
           "example-local-mcp": {
-            "env": ["FAKE_API_KEY"]
+            "env": ["FAKE_API_KEY"],
           },
           "example-remote-mcp": {
             "remote": {
               "headers": {
                 "Authorization": { "env": "REMOTE_API_KEY", "prefix": "Bearer " },
-                "X-Tenant": "REMOTE_TENANT"
-              }
-            }
-          }
-        }
-      }
-    }
+                "X-Tenant": "REMOTE_TENANT",
+              },
+            },
+          },
+        },
+      },
+    },
   ],
   "mcp": {
     "servers": {
       "example-local-mcp": {
         "type": "local",
-        "command": ["node", "./path/to/your-mcp-server.mjs"]
+        "command": ["node", "./path/to/your-mcp-server.mjs"],
       },
       "example-remote-mcp": {
         "type": "remote",
         "url": "https://mcp.example.test/mcp",
-        "oauth": false
-      }
-    }
-  }
+        "oauth": false,
+      },
+    },
+  },
 }
