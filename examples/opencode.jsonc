@@ -4,7 +4,7 @@
     {
       // Merge this entry into your existing config; preserve unrelated
       // plugins and MCP servers.
-      "package": "@bjorntech/key-ferry@0.1.1",
+      "package": "@bjorntech/key-ferry@0.1.2",
       "options": {
         "enabled": true,
         "projectDirectory": ".",

@@ -52,7 +52,7 @@ and preserve any unrelated entries already there:
 {
   "plugins": [
     {
-      "package": "@bjorntech/key-ferry@0.1.1",
+      "package": "@bjorntech/key-ferry@0.1.2",
       "options": {
         "enabled": true,
         "requireStrictEgress": true,
