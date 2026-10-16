@@ -78,4 +78,30 @@ jobs:
           }));
           NODE
           npm install --global npm@12.2.0
-          node scripts/release/publish-verified.mjs --manifest "$release_dir/manifest.json" --dry-run
+          real_npm="$(command -v npm)"
+          capture_dir="$RUNNER_TEMP/key-ferry-npm-capture"
+          mkdir -p "$capture_dir"
+          cat > "$capture_dir/npm" <<'SH'
+          #!/usr/bin/env sh
+          set -eu
+          : "${CAPTURE_FILE:?CAPTURE_FILE is required}"
+          printf '%s\n' "$@" > "$CAPTURE_FILE"
+          SH
+          chmod +x "$capture_dir/npm"
+          PATH="$capture_dir:$PATH" CAPTURE_FILE="$capture_dir/argv" \
+            node scripts/release/publish-verified.mjs --manifest "$release_dir/manifest.json" --publish
+          REAL_NPM="$real_npm" CAPTURE_FILE="$capture_dir/argv" node --input-type=module <<'NODE'
+          import { readFile } from "node:fs/promises";
+          import { spawnSync } from "node:child_process";
+          const args = (await readFile(process.env.CAPTURE_FILE, "utf8")).trimEnd().split("\n");
+          if (args[0] !== "publish" || args.includes("--publish")) throw new Error(`invalid captured npm argv: ${JSON.stringify(args)}`);
+          if (!args[1].endsWith(".tgz") || !args[1].startsWith("/")) throw new Error("captured artifact path is not absolute");
+          const replay = spawnSync(process.env.REAL_NPM, [...args, "--dry-run"], { stdio: "inherit" });
+          if (replay.status !== 0) process.exit(replay.status ?? 1);
+          NODE
+          bad_args=(publish "$(sed -n '2p' "$capture_dir/argv")" --access public --registry=https://registry.npmjs.org --provenance --ignore-scripts --publish --dry-run)
+          if "$real_npm" "${bad_args[@]}" >"$RUNNER_TEMP/bad-npm-argv.out" 2>&1; then
+            echo 'npm unexpectedly accepted the obsolete internal --publish flag' >&2
+            exit 1
+          fi
+          grep -E 'EUNKNOWNCONFIG|unknown option|Unknown option' "$RUNNER_TEMP/bad-npm-argv.out"

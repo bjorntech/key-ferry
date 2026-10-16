@@ -9,15 +9,32 @@ import { readReleaseManifest } from "./read-manifest.mjs";
 const execFileAsync = promisify(execFile);
 const REGISTRY = "https://registry.npmjs.org";
 const PACKAGE_NAME = "@bjorntech/key-ferry";
+const PRODUCTION_ARGS = [
+  "publish",
+  "--access",
+  "public",
+  `--registry=${REGISTRY}`,
+  "--provenance",
+  "--ignore-scripts",
+];
+
+function buildProductionArgs(artifactPath) {
+  return [PRODUCTION_ARGS[0], artifactPath, ...PRODUCTION_ARGS.slice(1)];
+}
+
+export function buildNpmArgs(artifactPath, action) {
+  if (action !== "--dry-run" && action !== "--publish") {
+    throw new Error("publish action must be explicitly --dry-run or --publish");
+  }
+  const productionArgs = buildProductionArgs(artifactPath);
+  return action === "--dry-run" ? [...productionArgs, "--dry-run"] : productionArgs;
+}
 
 export async function getVerifiedPublishCommand({
   manifestPath,
   packagePath = "package.json",
   action,
 }) {
-  if (action !== "--dry-run" && action !== "--publish") {
-    throw new Error("publish action must be explicitly --dry-run or --publish");
-  }
   const absoluteManifest = resolve(manifestPath);
   const manifest = await readReleaseManifest(absoluteManifest);
   const artifactDirectory = dirname(absoluteManifest);
@@ -48,41 +65,60 @@ export async function getVerifiedPublishCommand({
   return {
     manifest,
     artifactPath,
-    args: [
-      "publish",
-      artifactPath,
-      "--access",
-      "public",
-      `--registry=${REGISTRY}`,
-      "--provenance",
-      "--ignore-scripts",
-      action,
-    ],
+    args: buildNpmArgs(artifactPath, action),
   };
 }
 
-if (fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
-  const args = process.argv.slice(2);
-  const value = (name) => {
-    const index = args.indexOf(name);
-    return index === -1 ? undefined : args[index + 1];
-  };
-  const action = args.includes("--dry-run")
-    ? "--dry-run"
-    : args.includes("--publish")
-      ? "--publish"
-      : undefined;
-  const manifestPath = value("--manifest");
-  if (!manifestPath || !action || (args.includes("--dry-run") && args.includes("--publish"))) {
+export async function runVerifiedPublish({
+  manifestPath,
+  packagePath = "package.json",
+  action,
+  execute = execFileAsync,
+  environment = process.env,
+}) {
+  const { args } = await getVerifiedPublishCommand({ manifestPath, packagePath, action });
+  const env = { ...environment };
+  if (action === "--publish") {
+    delete env.NPM_TOKEN;
+    delete env.NODE_AUTH_TOKEN;
+  }
+  console.log(["npm", ...args].map((arg) => JSON.stringify(arg)).join(" "));
+  await execute("npm", args, { stdio: "inherit", env });
+}
+
+function parseCliArgs(args) {
+  let manifestPath;
+  let action;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--manifest") {
+      if (manifestPath || !args[index + 1] || args[index + 1].startsWith("--")) {
+        throw new Error(
+          "usage: node scripts/release/publish-verified.mjs --manifest PATH --dry-run|--publish",
+        );
+      }
+      manifestPath = args[++index];
+    } else if (arg === "--dry-run" || arg === "--publish") {
+      if (action) {
+        throw new Error(
+          "usage: node scripts/release/publish-verified.mjs --manifest PATH --dry-run|--publish",
+        );
+      }
+      action = arg;
+    } else {
+      throw new Error(
+        "usage: node scripts/release/publish-verified.mjs --manifest PATH --dry-run|--publish",
+      );
+    }
+  }
+  if (!manifestPath || !action) {
     throw new Error(
       "usage: node scripts/release/publish-verified.mjs --manifest PATH --dry-run|--publish",
     );
   }
-  const { args: npmArgs } = await getVerifiedPublishCommand({ manifestPath, action });
-  if (action === "--publish") {
-    delete process.env.NPM_TOKEN;
-    delete process.env.NODE_AUTH_TOKEN;
-  }
-  console.log(["npm", ...npmArgs].map((arg) => JSON.stringify(arg)).join(" "));
-  await execFileAsync("npm", npmArgs, { stdio: "inherit" });
+  return { manifestPath, action };
+}
+
+if (fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+  await runVerifiedPublish({ ...parseCliArgs(process.argv.slice(2)) });
 }

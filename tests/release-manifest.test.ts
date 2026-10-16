@@ -46,7 +46,11 @@ describe("release manifest loading", () => {
 
 import { createHash } from "node:crypto";
 import { symlink } from "node:fs/promises";
-import { getVerifiedPublishCommand } from "../scripts/release/publish-verified.mjs";
+import {
+  buildNpmArgs,
+  getVerifiedPublishCommand,
+  runVerifiedPublish,
+} from "../scripts/release/publish-verified.mjs";
 
 async function withRelease(callback: (directory: string) => Promise<void>) {
   const directory = await mkdtemp(join(tmpdir(), "key-ferry-publish-"));
@@ -87,6 +91,56 @@ describe("verified npm publish command", () => {
         "--ignore-scripts",
         "--dry-run",
       ]);
+    });
+  });
+
+  test("keeps the production argv identical to dry-run argv without its final probe flag", async () => {
+    await withRelease(async (directory) => {
+      const manifestPath = join(directory, "manifest.json");
+      const live = await getVerifiedPublishCommand({
+        manifestPath,
+        packagePath: join(directory, "package.json"),
+        action: "--publish",
+      });
+      const dry = await getVerifiedPublishCommand({
+        manifestPath,
+        packagePath: join(directory, "package.json"),
+        action: "--dry-run",
+      });
+      expect(live.args).toEqual(dry.args.slice(0, -1));
+      expect(live.args).not.toContain("--publish");
+      expect(buildNpmArgs(live.artifactPath, "--publish")).toEqual(live.args);
+    });
+  });
+
+  test("captures the live CLI path without allowing npm to run", async () => {
+    await withRelease(async (directory) => {
+      let command:
+        | { file: string; args: string[]; options: { env: NodeJS.ProcessEnv } }
+        | undefined;
+      await runVerifiedPublish({
+        manifestPath: join(directory, "manifest.json"),
+        packagePath: join(directory, "package.json"),
+        action: "--publish",
+        environment: {
+          NPM_TOKEN: "must-not-reach-child",
+          NODE_AUTH_TOKEN: "must-not-reach-child",
+          GITHUB_ACTIONS: "true",
+          ACTIONS_ID_TOKEN_REQUEST_URL: "managed-url",
+        },
+        execute: async (file, args, options) => {
+          command = { file, args, options: { env: options.env ?? {} } };
+          return { stdout: "", stderr: "" };
+        },
+      });
+      expect(command).toBeDefined();
+      expect(command?.file).toBe("npm");
+      expect(command?.args).toEqual(buildNpmArgs(command?.args[1] ?? "", "--publish"));
+      expect(command?.args).not.toContain("--publish");
+      expect(command?.options.env.NPM_TOKEN).toBeUndefined();
+      expect(command?.options.env.NODE_AUTH_TOKEN).toBeUndefined();
+      expect(command?.options.env.GITHUB_ACTIONS).toBe("true");
+      expect(command?.options.env.ACTIONS_ID_TOKEN_REQUEST_URL).toBe("managed-url");
     });
   });
 
