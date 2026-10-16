@@ -7,9 +7,9 @@ export type BaselineEntry = Pick<
   "file" | "name" | "complexity" | "crap" | "coverage" | "fingerprint" | "identity"
 >;
 
-export function baselineSource(commit: string, file: string): string {
+export function baselineSource(commit: string, file: string, repoRoot?: string): string {
   return execFileSync("git", ["show", `${commit}:${file}`], {
-    cwd: process.env.CRAP_REPO_ROOT ?? process.cwd(),
+    cwd: repoRoot ?? process.env.CRAP_REPO_ROOT ?? process.cwd(),
     encoding: "utf8",
   });
 }
@@ -19,9 +19,10 @@ export function baselineEntries(
   commit: string,
   files: readonly string[],
   coverage: ReadonlyMap<string, unknown>,
+  repoRoot?: string,
 ): BaselineEntry[] {
   return files.flatMap((file) => {
-    const text = baselineSource(commit, file);
+    const text = baselineSource(commit, file, repoRoot);
     return analyzeFile(file, text, coverage.get(file)).map(
       ({
         line: _line,

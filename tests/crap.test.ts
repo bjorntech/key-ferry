@@ -1,4 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import ts from "typescript";
 import { analyzeFile } from "../scripts/crap/analyze.js";
 import { baselineEntries } from "../scripts/crap/baseline.js";
@@ -91,14 +95,49 @@ describe("CRAP metrics", () => {
     ).toThrow("Malformed Istanbul coverage");
   });
 
-  test("baseline entries are hydrated metrics, never zero placeholders", () => {
-    const entries = baselineEntries("66f5cf9", ["src/options.ts"], new Map());
-    expect(entries.length).toBeGreaterThan(0);
-    expect(
-      entries.every(
-        (entry) => entry.crap > 0 && entry.fingerprint.length > 0 && entry.identity.length > 0,
-      ),
-    ).toBe(true);
+  test("baseline entries read an immutable commit in a shallow-safe fixture repo", () => {
+    const repo = mkdtempSync(join(tmpdir(), "crap-baseline-"));
+    try {
+      const fixture = "function f(value: boolean) { if (value) return 1; return 0 }\n";
+      writeFileSync(join(repo, "fixture.ts"), fixture);
+      execFileSync("git", ["init", "-q"], { cwd: repo });
+      execFileSync("git", ["add", "fixture.ts"], { cwd: repo });
+      execFileSync(
+        "git",
+        [
+          "-c",
+          "user.name=CRAP test fixture",
+          "-c",
+          "user.email=crap-fixture@example.invalid",
+          "commit",
+          "-qm",
+          "fixture",
+        ],
+        { cwd: repo },
+      );
+      const commit = execFileSync("git", ["rev-parse", "HEAD"], {
+        cwd: repo,
+        encoding: "utf8",
+      }).trim();
+
+      const baseline = baselineEntries(commit, ["fixture.ts"], new Map(), repo);
+      expect(baseline.length).toBeGreaterThan(0);
+      expect(
+        baseline.every(
+          (entry) => entry.crap > 0 && entry.fingerprint.length > 0 && entry.identity.length > 0,
+        ),
+      ).toBe(true);
+
+      const changed =
+        "function changed(value: boolean) { if (value) return 1; if (!value) return 2; return 0 }\n";
+      writeFileSync(join(repo, "fixture.ts"), changed);
+      const workingTreeMetric = analyzeFile("fixture.ts", changed, undefined)[0];
+      const unchangedBaseline = baselineEntries(commit, ["fixture.ts"], new Map(), repo);
+      expect(workingTreeMetric.fingerprint).not.toBe(baseline[0].fingerprint);
+      expect(unchangedBaseline).toEqual(baseline);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
   });
 
   test("attributes statements to the function owning them", () => {
