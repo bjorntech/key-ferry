@@ -1,6 +1,11 @@
 # Changelog
 
-## 0.1.0 — Unreleased / release preparation
+## 0.1.1 — 2026-10-16
+
+This release validates GitHub Actions OIDC publishing and npm provenance. It
+contains no runtime feature changes.
+
+## 0.1.0 — 2026-10-16
 
 This entry records the first public release and its maintainer verification
 requirements.
