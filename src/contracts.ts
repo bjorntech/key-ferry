@@ -74,11 +74,23 @@ export interface ProjectKeyFerryManagerService {
   /** Start or reuse the manager-owned process, failing closed if not ready. */
   readonly ensureStarted: Effect.Effect<SafeStatus, VarlockError>;
 
+  /** Start/reuse and read the environment under one lifecycle lock. */
+  readonly ensureReady: Effect.Effect<
+    { readonly status: SafeStatus; readonly environment: ResolvedEnvironment },
+    VarlockError
+  >;
+
   /** Internal-only environment capability for a child process or proxy. */
   readonly environment: Effect.Effect<ResolvedEnvironment, VarlockError>;
 
   /** Re-resolve and atomically apply values; failures leave the connection closed. */
   readonly refresh: Effect.Effect<SafeStatus, VarlockError>;
+
+  /** Refresh and read the resulting environment under one lifecycle lock. */
+  readonly refreshReady: Effect.Effect<
+    { readonly status: SafeStatus; readonly environment: ResolvedEnvironment },
+    VarlockError
+  >;
 
   /** Idempotent teardown of only the process and resources this manager owns. */
   readonly dispose: Effect.Effect<void>;

@@ -558,6 +558,20 @@ export function makeProjectKeyFerryManager(
       const exclusive = <A>(effect: Effect.Effect<A, VarlockError>) => lock.withPermit(effect);
       const ensureStarted = exclusive(startInternal());
 
+      // Keep startup and environment publication under one permit. The plugin
+      // must not compose the individually locked operations, or a non-reentrant
+      // semaphore would deadlock while trying to acquire itself again.
+      const ensureReady = exclusive(
+        Effect.gen(function* () {
+          yield* healthCheck();
+          if (!state.process || !state.session || state.phase !== "ready") {
+            yield* startInternal();
+          }
+          if (!state.environment) return yield* Effect.fail(safeError("not_ready", true));
+          return { status: statusSnapshot(state, cwd), environment: state.environment };
+        }),
+      );
+
       const environmentEffect = exclusive(
         Effect.gen(function* () {
           yield* healthCheck();
@@ -570,65 +584,63 @@ export function makeProjectKeyFerryManager(
         }),
       );
 
-      const refresh = exclusive(
-        Effect.gen(function* () {
-          yield* ensureRefreshReadiness({ state, healthCheck, start: startInternal });
-          const session = yield* requireRefreshSession(state);
-          const reload = runCommand(
-            processService,
-            config,
-            cwd,
-            ["proxy", "reload", "--session", session.uuid],
-            config.reloadTimeoutMs,
-            ambientEnvironment,
-          ).pipe(
-            Effect.mapError(
-              (error) =>
-                new VarlockError({
-                  ...error,
-                  code: error.code === "timeout" ? "timeout" : "refresh_failed",
-                  message: error.message,
-                }),
-            ),
-          );
-          const readStatus = runCommand(
-            processService,
-            config,
-            cwd,
-            ["proxy", "status", "--format", "json"],
-            config.commandTimeoutMs,
-            ambientEnvironment,
-          ).pipe(
-            Effect.flatMap(({ stdout }) =>
-              Effect.try({
-                try: () => decodeSessionList(stdout),
-                catch: () => safeError("protocol_error", false),
+      const refreshInternal = Effect.gen(function* () {
+        yield* ensureRefreshReadiness({ state, healthCheck, start: startInternal });
+        const session = yield* requireRefreshSession(state);
+        const reload = runCommand(
+          processService,
+          config,
+          cwd,
+          ["proxy", "reload", "--session", session.uuid],
+          config.reloadTimeoutMs,
+          ambientEnvironment,
+        ).pipe(
+          Effect.mapError(
+            (error) =>
+              new VarlockError({
+                ...error,
+                code: error.code === "timeout" ? "timeout" : "refresh_failed",
+                message: error.message,
               }),
-            ),
-          );
-          const result = yield* completeRefreshHandshake(
-            reload,
-            readStatus,
-            session,
-            state.process!.pid,
-            cwd,
-            readEnvironment,
-          );
-          yield* validateRefreshCapability(
-            state,
-            result.session,
-            config.requireStrictEgress,
-            healthCheck,
-            clearCapability,
-          );
-          state.session = result.session;
-          state.environment = result.environment;
-          state.generation += 1;
-          state.lastRefreshAt = new Date().toISOString();
-          state.error = undefined;
-          return statusSnapshot(state, cwd);
-        }),
-      ).pipe(
+          ),
+        );
+        const readStatus = runCommand(
+          processService,
+          config,
+          cwd,
+          ["proxy", "status", "--format", "json"],
+          config.commandTimeoutMs,
+          ambientEnvironment,
+        ).pipe(
+          Effect.flatMap(({ stdout }) =>
+            Effect.try({
+              try: () => decodeSessionList(stdout),
+              catch: () => safeError("protocol_error", false),
+            }),
+          ),
+        );
+        const result = yield* completeRefreshHandshake(
+          reload,
+          readStatus,
+          session,
+          state.process!.pid,
+          cwd,
+          readEnvironment,
+        );
+        yield* validateRefreshCapability(
+          state,
+          result.session,
+          config.requireStrictEgress,
+          healthCheck,
+          clearCapability,
+        );
+        state.session = result.session;
+        state.environment = result.environment;
+        state.generation += 1;
+        state.lastRefreshAt = new Date().toISOString();
+        state.error = undefined;
+        return statusSnapshot(state, cwd);
+      }).pipe(
         Effect.catch((error) =>
           Effect.gen(function* () {
             if (error.code !== "disposed") {
@@ -645,6 +657,14 @@ export function makeProjectKeyFerryManager(
             );
           }),
         ),
+      );
+      const refresh = exclusive(refreshInternal);
+      const refreshReady = exclusive(
+        Effect.gen(function* () {
+          const status = yield* refreshInternal;
+          if (!state.environment) return yield* Effect.fail(safeError("not_ready", true));
+          return { status, environment: state.environment };
+        }),
       );
 
       const dispose = lock.withPermit(
@@ -665,8 +685,10 @@ export function makeProjectKeyFerryManager(
       const service: ProjectKeyFerryManagerService = {
         status,
         ensureStarted,
+        ensureReady,
         environment: environmentEffect,
         refresh,
+        refreshReady,
         dispose,
         withExclusive: <A, E, R>(effect: Effect.Effect<A, E, R>) => lock.withPermit(effect),
       };

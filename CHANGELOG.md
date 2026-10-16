@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.6 — 2026-10-16
+
+This patch release hardens plugin activation and retains atomic lifecycle
+readiness. Registered plugins without an `enabled` option remain enabled by
+default.
+
+### Fixed
+
+- Remove non-reentrant startup and refresh semaphore deadlocks that could make
+  plugin activation or refresh time out.
+- Validate options and short-circuit explicitly disabled registrations before
+  reading the project location or initializing the manager.
+
 ## 0.1.5 — 2026-10-16
 
 This patch release completes child-process cleanup after forced termination.

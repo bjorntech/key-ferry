@@ -101,24 +101,20 @@ export function applyProtection(
 }
 
 const ensureState = (manager: ProjectKeyFerryManagerService) =>
-  manager
-    .withExclusive(
-      Effect.gen(function* () {
-        const status = yield* manager.ensureStarted;
-        const environment = yield* manager.environment;
-        return { status: sanitizeStatus(status), environment };
-      }),
-    )
-    .pipe(
-      Effect.catch((error) =>
-        manager.status.pipe(
-          Effect.map((status) => ({
-            status: sanitizeStatus({ ...status, error }),
-            environment: {},
-          })),
-        ),
+  manager.ensureReady.pipe(
+    Effect.map(({ status, environment }) => ({
+      status: sanitizeStatus(status),
+      environment,
+    })),
+    Effect.catch((error) =>
+      manager.status.pipe(
+        Effect.map((status) => ({
+          status: sanitizeStatus({ ...status, error }),
+          environment: {},
+        })),
       ),
-    );
+    ),
+  );
 
 function snapshotServers(editor: McpEditor): ReadonlyMap<string, RemoteServerSnapshot> {
   const result = new Map<string, RemoteServerSnapshot>();
@@ -138,6 +134,52 @@ function snapshotServers(editor: McpEditor): ReadonlyMap<string, RemoteServerSna
   return result;
 }
 
+export type HealthPollDecision = "noop" | "clear" | "reconcile";
+
+function unavailableHealthDecision(ready: boolean, remoteHandleCount: number): HealthPollDecision {
+  if (ready) return "clear";
+  if (remoteHandleCount > 0) return "clear";
+  return "noop";
+}
+
+function readyHealthDecision(
+  ready: boolean,
+  relayHealthy: boolean,
+  generation: number,
+  observedGeneration: number,
+): HealthPollDecision {
+  if (!relayHealthy) return "clear";
+  if (generation !== observedGeneration) return "reconcile";
+  if (!ready) return "reconcile";
+  return "noop";
+}
+
+/** Decide the side-effecting health action separately from its scheduler. */
+export function healthPollDecision(
+  phase: SafeStatus["phase"],
+  ready: boolean,
+  remoteHandleCount: number,
+  relayHealthy: boolean,
+  generation: number,
+  observedGeneration: number,
+): HealthPollDecision {
+  if (phase !== "ready") return unavailableHealthDecision(ready, remoteHandleCount);
+  return readyHealthDecision(ready, relayHealthy, generation, observedGeneration);
+}
+
+type PluginOptionsContext = {
+  readonly options: unknown;
+  readonly location: { readonly project: { readonly directory: string } };
+};
+
+function parsePluginOptions(ctx: PluginOptionsContext): ValidatedOptions {
+  // Fully validate disabled options without touching the host location.
+  // Relative project paths are deliberately left unresolved because they are
+  // unused on this path and must not be resolved against process.cwd().
+  const preflight = parseOptions(ctx.options, undefined, false);
+  return preflight.enabled ? parseOptions(ctx.options, ctx.location.project.directory) : preflight;
+}
+
 /** Construct the native OpenCode V2 plugin. The real manager is injected later. */
 export function makePlugin(
   factory: ProjectKeyFerryManagerFactory,
@@ -146,7 +188,7 @@ export function makePlugin(
   return Plugin.define({
     id: "key-ferry",
     effect: (ctx) => {
-      const parsed = parseOptions(ctx.options, ctx.location.project.directory);
+      const parsed = parsePluginOptions(ctx);
       if (!parsed.enabled) return Effect.void;
       const program = Effect.gen(function* () {
         const pluginScope = yield* Effect.scope;
@@ -209,46 +251,72 @@ export function makePlugin(
         yield* ctx.rpc.register(KeyFerryRpc, {
           status: () => manager.status.pipe(Effect.map(publicStatus)),
           refresh: (_, context) =>
-            manager.withExclusive(
-              Effect.gen(function* () {
-                yield* remote.stopAll;
-                setState({ ready: false, environment: {}, remoteHandles: remote.handles });
-                yield* ctx.mcp.reload();
-                const status = yield* manager.refresh;
-                const environment = yield* manager.environment;
-                yield* reconcileRemote(status, environment);
-                yield* ctx.mcp.reload();
-                return publicStatus(status);
-              }).pipe(
-                Effect.catch((error) =>
-                  Effect.sync(() => {
-                    remoteDiagnostics = remote.diagnostics;
-                    setState({ ready: false, environment: {}, remoteHandles: remote.handles });
-                  }).pipe(
-                    Effect.andThen(ctx.mcp.reload()),
-                    Effect.andThen(
-                      Effect.fail(
-                        context.error("unavailable", publicMessage(error), rpcError(error)),
-                      ),
+            Effect.gen(function* () {
+              yield* remote.stopAll;
+              setState({ ready: false, environment: {}, remoteHandles: remote.handles });
+              yield* ctx.mcp.reload();
+              const next = yield* manager.refreshReady;
+              yield* reconcileRemote(next.status, next.environment);
+              yield* ctx.mcp.reload();
+              return publicStatus(next.status);
+            }).pipe(
+              Effect.catch((error) =>
+                Effect.sync(() => {
+                  remoteDiagnostics = remote.diagnostics;
+                  setState({ ready: false, environment: {}, remoteHandles: remote.handles });
+                }).pipe(
+                  Effect.andThen(ctx.mcp.reload()),
+                  Effect.andThen(
+                    Effect.fail(
+                      context.error("unavailable", publicMessage(error), rpcError(error)),
                     ),
                   ),
                 ),
               ),
             ),
           doctor: (_, context) =>
-            manager.withExclusive(
-              Effect.gen(function* () {
-                const next = yield* ensureState(manager);
-                yield* reconcileRemote(next.status, next.environment);
-                yield* ctx.mcp.reload();
-                return publicStatus(next.status);
-              }).pipe(
-                Effect.catch((error) =>
-                  Effect.fail(context.error("unavailable", publicMessage(error), rpcError(error))),
-                ),
+            Effect.gen(function* () {
+              const next = yield* ensureState(manager);
+              yield* reconcileRemote(next.status, next.environment);
+              yield* ctx.mcp.reload();
+              return publicStatus(next.status);
+            }).pipe(
+              Effect.catch((error) =>
+                Effect.fail(context.error("unavailable", publicMessage(error), rpcError(error))),
               ),
             ),
         });
+
+        const clearProtection = Effect.gen(function* () {
+          yield* remote.stopAll;
+          setState({ ready: false, environment: {}, remoteHandles: remote.handles });
+          yield* ctx.mcp.reload();
+        });
+        const reconcileGeneration = (status: SafeStatus) =>
+          Effect.gen(function* () {
+            yield* remote.stopAll;
+            const next = yield* ensureState(manager);
+            observedGeneration = next.status.generation;
+            if (next.status.phase === "ready") {
+              yield* Effect.provideService(
+                remote.reconcile(
+                  serverSnapshots,
+                  parsed.adapter.servers,
+                  next.environment,
+                  next.status.generation,
+                ),
+                Scope.Scope,
+                pluginScope,
+              );
+              remoteDiagnostics = remote.diagnostics;
+            }
+            setState({
+              ready: next.status.phase === "ready",
+              environment: next.environment,
+              remoteHandles: remote.handles,
+            });
+            yield* ctx.mcp.reload();
+          });
 
         // The manager owns process health. Poll only safe metadata and disable
         // protected servers immediately if the owned process dies. A changed
@@ -258,44 +326,23 @@ export function makePlugin(
             Effect.gen(function* () {
               yield* Effect.sleep("30 seconds");
               const status = yield* manager.status;
-              if (status.phase !== "ready") {
-                if (state.ready || remote.handles.size > 0) {
-                  yield* remote.stopAll;
-                  setState({ ready: false, environment: {}, remoteHandles: remote.handles });
-                  yield* ctx.mcp.reload();
-                }
-                return;
-              }
-              const relayHealthy = yield* remote.health;
-              if (!relayHealthy) {
-                yield* remote.stopAll;
-                setState({ ready: false, environment: {}, remoteHandles: remote.handles });
-                yield* ctx.mcp.reload();
-                return;
-              }
-              if (status.generation === observedGeneration && state.ready) return;
-              yield* remote.stopAll;
-              const next = yield* ensureState(manager);
-              observedGeneration = next.status.generation;
-              if (next.status.phase === "ready") {
-                yield* Effect.provideService(
-                  remote.reconcile(
-                    serverSnapshots,
-                    parsed.adapter.servers,
-                    next.environment,
-                    next.status.generation,
-                  ),
-                  Scope.Scope,
-                  pluginScope,
-                );
-                remoteDiagnostics = remote.diagnostics;
-              }
-              setState({
-                ready: next.status.phase === "ready",
-                environment: next.environment,
-                remoteHandles: remote.handles,
-              });
-              yield* ctx.mcp.reload();
+              const relayHealthy = yield* status.phase !== "ready"
+                ? Effect.succeed(false)
+                : remote.health;
+              const decision = healthPollDecision(
+                status.phase,
+                state.ready,
+                remote.handles.size,
+                relayHealthy,
+                status.generation,
+                observedGeneration,
+              );
+              const action = {
+                noop: Effect.void,
+                clear: clearProtection,
+                reconcile: reconcileGeneration(status),
+              } satisfies Record<HealthPollDecision, Effect.Effect<void>>;
+              yield* action[decision];
             }),
           ).pipe(Effect.catch(() => Effect.void)),
         );

@@ -3,6 +3,7 @@ import { chmodSync, existsSync, mkdirSync, symlinkSync, unlinkSync, writeFileSyn
 import test from "node:test";
 import { Context, Effect, Layer } from "effect";
 import { ProjectKeyFerryManager, VarlockError, projectDirectory } from "../src/contracts.js";
+import { makePlugin } from "../src/plugin.js";
 import {
   Process,
   ProcessError,
@@ -174,6 +175,48 @@ async function inManager<A>(
   return Effect.runPromise(Effect.scoped(program));
 }
 
+async function runRealPlugin(fake: Fake, operation: "startup" | "refresh") {
+  let handlers: any;
+  let observedStatus: any;
+  const editor = {
+    list: () => [],
+    get: () => undefined,
+    update: () => undefined,
+  };
+  const plugin = makePlugin({ layer: () => layer(fake) });
+  const context = {
+    options: {},
+    location: { project: { directory: fixtureProject } },
+    mcp: {
+      transform: (callback: (value: typeof editor) => void) => Effect.sync(() => callback(editor)),
+      reload: () => Effect.void,
+    },
+    rpc: {
+      register: (_definition: unknown, value: unknown) =>
+        Effect.gen(function* () {
+          handlers = value as any;
+          if (operation === "refresh") {
+            yield* handlers.refresh({}, { error: () => new Error("safe") });
+          }
+          observedStatus = yield* handlers.status({});
+          return { dispose: Effect.void, events: { emit: () => Effect.void } };
+        }),
+    },
+  } as never;
+  const program = Effect.scoped(
+    Effect.gen(function* () {
+      yield* plugin.effect(context);
+      return observedStatus;
+    }),
+  ).pipe(
+    Effect.timeoutOrElse({
+      duration: 2_000,
+      orElse: () => Effect.fail(new Error(`plugin ${operation} timed out`)),
+    }),
+  );
+  return Effect.runPromise(program);
+}
+
 test("starts lazily, returns only placeholder-backed requested keys, and disposes its child", async () => {
   const fake = fakeProcess();
   const result = await inManager(fake, (manager) =>
@@ -192,6 +235,53 @@ test("starts lazily, returns only placeholder-backed requested keys, and dispose
   assert.equal("endpointToken" in result.env, false);
   assert.deepEqual(fake.starts, [9001]);
   assert.deepEqual(fake.stops, [9001]);
+});
+
+test("atomically ensures readiness and returns the matching environment", async () => {
+  const fake = fakeProcess();
+  const result = await inManager(fake, (manager) => manager.ensureReady);
+  assert.equal(result.status.phase, "ready");
+  assert.equal(result.environment.OPENAI_API_KEY, "sk-placeholder");
+  assert.deepEqual(fake.starts, [9001]);
+});
+
+test("atomically refreshes readiness and returns the refreshed environment", async () => {
+  const fake = fakeProcess();
+  const result = await inManager(fake, (manager) =>
+    Effect.gen(function* () {
+      yield* manager.ensureStarted;
+      return yield* manager.refreshReady;
+    }),
+  );
+  assert.equal(result.status.phase, "ready");
+  assert.equal(result.environment.OPENAI_API_KEY, "sk-placeholder");
+  assert.equal(fake.starts.length, 1);
+});
+
+test("concurrent atomic startup calls share one owned process", async () => {
+  const fake = fakeProcess();
+  const result = await inManager(fake, (manager) =>
+    Effect.all([manager.ensureReady, manager.ensureReady], { concurrency: "unbounded" }),
+  );
+  assert.equal(result[0].status.generation, result[1].status.generation);
+  assert.equal(result[0].environment.OPENAI_API_KEY, result[1].environment.OPENAI_API_KEY);
+  assert.deepEqual(fake.starts, [9001]);
+});
+
+test("real plugin startup uses the manager's atomic lifecycle operation", async () => {
+  const fake = fakeProcess();
+  const status = await runRealPlugin(fake, "startup");
+  assert.equal(status.phase, "ready");
+  assert.equal(fake.starts.length, 1);
+});
+
+test("real plugin refresh uses one permit and keeps status/environment coherent", async () => {
+  const fake = fakeProcess();
+  const status = await runRealPlugin(fake, "refresh");
+  assert.equal(status.phase, "ready");
+  assert.equal(status.generation, 1);
+  assert.equal(fake.starts.length, 1);
+  assert.equal(fake.runs.filter((run) => run.includes("reload")).length, 1);
 });
 
 test("typed spawn failure enters failed state and can retry without an owned child", async () => {

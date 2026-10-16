@@ -207,7 +207,11 @@ function normalizeRemoteServer(
  * `enabled: false` explicitly means no manager layer, MCP transform, or RPC
  * is installed and existing MCP configuration is left untouched.
  */
-export function parseOptions(raw: unknown, directory?: string): ValidatedOptions {
+export function parseOptions(
+  raw: unknown,
+  directory?: string,
+  resolveProjectDirectory = true,
+): ValidatedOptions {
   const input = isRecord(raw) ? raw : {};
   if ("failClosed" in input)
     throw new TypeError("failClosed is not supported; protection is always fail-closed");
@@ -231,7 +235,11 @@ export function parseOptions(raw: unknown, directory?: string): ValidatedOptions
           ) {
             throw new TypeError("projectDirectory must be a non-empty path");
           }
-          return brandProjectDirectory(resolve(directory ?? process.cwd(), input.projectDirectory));
+          return brandProjectDirectory(
+            resolveProjectDirectory
+              ? resolve(directory ?? process.cwd(), input.projectDirectory)
+              : input.projectDirectory,
+          );
         })();
 
   const command = input.command === undefined ? ["varlock"] : stringArray(input.command, "command");

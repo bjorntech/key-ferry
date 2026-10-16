@@ -11,7 +11,7 @@ import {
 } from "../src/contracts.js";
 import type { ProjectKeyFerryManagerFactory } from "../src/contracts.js";
 import { parseOptions } from "../src/options.js";
-import { applyProtection, makePlugin } from "../src/plugin.js";
+import { applyProtection, healthPollDecision, makePlugin } from "../src/plugin.js";
 import { RELAY_AUTH_HEADER, type RemoteRelayHandle } from "../src/remote.js";
 
 const doctorCaPath = "/tmp/key-ferry-doctor-ca.pem";
@@ -225,6 +225,50 @@ describe("local MCP protection", () => {
   });
 });
 
+describe("plugin registration gating", () => {
+  test("explicitly disabled registration does not read location or create the manager layer", async () => {
+    let layerCalls = 0;
+    const factory: ProjectKeyFerryManagerFactory = {
+      layer: () => {
+        layerCalls += 1;
+        throw new Error("manager layer must not be created");
+      },
+    };
+    const plugin = makePlugin(factory);
+    const context = {
+      options: { enabled: false },
+      get location(): never {
+        throw new Error("location must not be read when disabled");
+      },
+    } as never;
+
+    await Effect.runPromise(plugin.effect(context));
+    expect(layerCalls).toBe(0);
+  });
+
+  test("disabled registration still rejects unsupported and malformed options", () => {
+    const plugin = makePlugin({ layer: () => Layer.succeed(ProjectKeyFerryManager, {} as never) });
+    const location = { project: { directory: "/unused" } };
+    for (const options of [
+      { enabled: false, failClosed: true },
+      { enabled: false, command: [] },
+      { enabled: false, requireStrictEgress: "no" },
+    ]) {
+      expect(() => plugin.effect({ options, location } as never)).toThrow();
+    }
+  });
+});
+
+describe("health polling decisions", () => {
+  test("covers fail-closed, reconcile, and no-op scheduler outcomes", () => {
+    expect(healthPollDecision("failed", true, 0, false, 1, 1)).toBe("clear");
+    expect(healthPollDecision("failed", false, 0, false, 1, 1)).toBe("noop");
+    expect(healthPollDecision("ready", true, 1, false, 1, 1)).toBe("clear");
+    expect(healthPollDecision("ready", true, 1, true, 1, 1)).toBe("noop");
+    expect(healthPollDecision("ready", false, 0, true, 2, 1)).toBe("reconcile");
+  });
+});
+
 describe("doctor remote relay recovery", () => {
   const readyStatus = (): SafeStatus => ({
     phase: "ready",
@@ -307,6 +351,22 @@ describe("doctor remote relay recovery", () => {
             }),
           )
         : Effect.sync(readyStatus),
+      ensureReady: startupFailure
+        ? Effect.fail(
+            new VarlockError({
+              code: "start_failed",
+              message: "raw startup secret",
+              retryable: true,
+            }),
+          )
+        : Effect.sync(() => ({
+            status: readyStatus(),
+            environment: {
+              API_KEY: "placeholder",
+              HTTPS_PROXY: "http://127.0.0.1:1",
+              NODE_EXTRA_CA_CERTS: doctorCaPath,
+            },
+          })),
       environment: Effect.succeed({
         API_KEY: "placeholder",
         HTTPS_PROXY: "http://127.0.0.1:1",
@@ -322,8 +382,27 @@ describe("doctor remote relay recovery", () => {
               }),
             )
           : Effect.sync(readyStatus),
+      refreshReady:
+        operation === "refresh" && refreshFailure
+          ? Effect.fail(
+              new VarlockError({
+                code: "refresh_failed",
+                message: "raw refresh secret",
+                retryable: true,
+              }),
+            )
+          : Effect.sync(() => ({
+              status: readyStatus(),
+              environment: {
+                API_KEY: "placeholder",
+                HTTPS_PROXY: "http://127.0.0.1:1",
+                NODE_EXTRA_CA_CERTS: doctorCaPath,
+              },
+            })),
       dispose: Effect.void,
-      withExclusive: <A, E, R>(effect: Effect.Effect<A, E, R>) => effect,
+      withExclusive: () => {
+        throw new Error("plugin must use the manager's atomic lifecycle operations");
+      },
     };
     const factory: ProjectKeyFerryManagerFactory = {
       layer: () => Layer.succeed(ProjectKeyFerryManager, manager),

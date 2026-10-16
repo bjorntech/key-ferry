@@ -29,6 +29,11 @@ describe("plugin options", () => {
     expect(result.adapter.servers).toEqual({});
   });
 
+  test("disabled plugin registration does not require a project location", () => {
+    const result = parseOptions({ enabled: false });
+    expect(result.enabled).toBe(false);
+  });
+
   test("rejects unbounded or malformed configuration", () => {
     expect(() => parseOptions({ refreshTimeoutMs: 900_001 })).toThrow();
     expect(() => parseOptions({ servers: { tools: { env: [] } } })).toThrow();
