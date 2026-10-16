@@ -35,7 +35,7 @@ jobs:
         run: bun run format:check
 
       - name: Test with coverage
-        run: set -o pipefail; bun run test:coverage 2>&1 | tee coverage/coverage.txt
+        run: mkdir -p coverage; set -o pipefail; bun run test:coverage 2>&1 | tee coverage/coverage.txt
 
       - name: Test CRAP quality gate
         run: set -o pipefail; CRAP_JSON=1 bun run test:crap 2>&1 | tee coverage/crap.json
