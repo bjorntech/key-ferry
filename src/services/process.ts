@@ -75,39 +75,54 @@ const error = (
 const kill = (child: ChildProcess, graceMs: number): Effect.Effect<void, ProcessError> =>
   Effect.callback((resume) => {
     let settled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    let graceTimer: ReturnType<typeof setTimeout> | undefined;
+    let reapTimer: ReturnType<typeof setTimeout> | undefined;
     const finish = () => {
       if (!settled) {
         settled = true;
-        if (timer) clearTimeout(timer);
+        if (graceTimer) clearTimeout(graceTimer);
+        if (reapTimer) clearTimeout(reapTimer);
         child.removeListener("close", finish);
         resume(Effect.void);
       }
     };
+    const waitForClose = () => {
+      // `kill` only sends a signal. Keep the listener installed until Node has
+      // reaped the child, but retain a deadline for runtimes that never emit
+      // close after an already-lost child.
+      reapTimer = setTimeout(finish, 1000);
+    };
+    const killImmediately = () => {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // The child may have exited between the state check and the signal.
+      }
+      waitForClose();
+    };
+    const cleanup = () => {
+      clearTimeout(graceTimer);
+      clearTimeout(reapTimer);
+      child.removeListener("close", finish);
+    };
     child.once("close", finish);
-    if (child.exitCode !== null || child.signalCode !== null) return finish();
+    if (child.exitCode !== null || child.signalCode !== null) {
+      waitForClose();
+      return Effect.sync(cleanup);
+    }
     try {
       child.kill("SIGTERM");
     } catch {
-      return finish();
+      killImmediately();
+      return Effect.sync(cleanup);
     }
-    timer = setTimeout(
+    graceTimer = setTimeout(
       () => {
-        if (child.exitCode === null && child.signalCode === null) {
-          try {
-            child.kill("SIGKILL");
-          } catch {
-            // The process may have exited between the check and kill.
-          }
-        }
-        finish();
+        killImmediately();
       },
       Math.max(0, graceMs),
     );
-    return Effect.sync(() => {
-      if (timer) clearTimeout(timer);
-      child.removeListener("close", finish);
-    });
+    return Effect.sync(cleanup);
   });
 
 const spawnRaw = (
@@ -157,12 +172,13 @@ const spawnRaw = (
       let stopped = false;
       const stop = Effect.suspend(() => {
         if (stopped) return Effect.void;
-        stopped = true;
         // A stop is bounded by kill's grace period, but must not be
         // interruptible between SIGTERM and the SIGKILL fallback. Otherwise
         // an interrupted stop can clear the fallback timer while `stopped`
         // prevents scope finalization from trying again.
-        return Effect.uninterruptible(kill(child, input.terminateGraceMs ?? defaultGraceMs));
+        return Effect.uninterruptible(kill(child, input.terminateGraceMs ?? defaultGraceMs)).pipe(
+          Effect.tap(() => Effect.sync(() => (stopped = true))),
+        );
       });
       resume(
         Effect.succeed({

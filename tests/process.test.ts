@@ -9,6 +9,19 @@ const run = <A, E>(effect: Effect.Effect<A, E>) =>
   Effect.runPromise(effect.pipe(Effect.provide(ProcessLive)));
 const node = process.execPath;
 
+const waitForPidExit = async (pid: number, timeoutMs = 2000): Promise<boolean> => {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return true;
+    }
+    await Bun.sleep(10);
+  }
+  return false;
+};
+
 describe("Process", () => {
   it("executes without a shell and preserves cwd and argv", async () => {
     const result = await run(
@@ -148,8 +161,26 @@ describe("Process", () => {
     expect(Exit.isSuccess(result)).toBe(true);
     expect(performance.now() - started).toBeLessThan(2000);
     if (pid !== undefined) {
-      expect(() => process.kill(pid, 0)).toThrow();
+      expect(await waitForPidExit(pid)).toBe(true);
     }
+  });
+
+  it("waits for an already-exited child before completing stop", async () => {
+    const result = await Effect.runPromiseExit(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const service = yield* Process;
+          const child = yield* service.spawn({
+            executable: node,
+            args: ["-e", "process.exit(0)"],
+            cwd: process.cwd(),
+          });
+          yield* Effect.sleep("50 millis");
+          yield* child.stop;
+        }).pipe(Effect.provide(ProcessLive)),
+      ),
+    );
+    expect(Exit.isSuccess(result)).toBe(true);
   });
 
   it("bounds capture for stdout and stderr", async () => {
@@ -224,8 +255,7 @@ describe("Process", () => {
       );
       expect(Exit.isSuccess(result)).toBe(true);
       const pid = Number(readFileSync(pidFile, "utf8"));
-      await Bun.sleep(650);
-      expect(() => process.kill(pid, 0)).toThrow();
+      expect(await waitForPidExit(pid)).toBe(true);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
@@ -271,8 +301,7 @@ describe("Process", () => {
     );
     expect(Exit.isSuccess(result)).toBe(true);
     if (pid !== undefined) {
-      await Bun.sleep(80);
-      expect(() => process.kill(pid!, 0)).toThrow();
+      expect(await waitForPidExit(pid)).toBe(true);
     }
   });
 
@@ -293,8 +322,7 @@ describe("Process", () => {
     );
     expect(Exit.isSuccess(result)).toBe(true);
     if (Exit.isSuccess(result)) {
-      await Bun.sleep(80);
-      expect(() => process.kill(result.value, 0)).toThrow();
+      expect(await waitForPidExit(result.value)).toBe(true);
     }
   });
 });

@@ -2,7 +2,11 @@ name: CI
 
 on:
   push:
+    branches:
+      - main
   pull_request:
+    branches:
+      - main
 
 permissions:
   contents: read
@@ -39,6 +43,9 @@ jobs:
 
       - name: Test CRAP quality gate
         run: set -o pipefail; CRAP_JSON=1 bun run test:crap 2>&1 | tee coverage/crap.json
+
+      - name: Stress process lifecycle tests
+        run: bun test tests/process.test.ts --rerun-each 5
 
       - name: Upload coverage artifacts
         if: always()
@@ -90,13 +97,31 @@ jobs:
           chmod +x "$capture_dir/npm"
           PATH="$capture_dir:$PATH" CAPTURE_FILE="$capture_dir/argv" \
             node scripts/release/publish-verified.mjs --manifest "$release_dir/manifest.json" --publish
-          REAL_NPM="$real_npm" CAPTURE_FILE="$capture_dir/argv" node --input-type=module <<'NODE'
+          registry_port_file="$RUNNER_TEMP/npm-registry-port"
+          REGISTRY_PORT_FILE="$registry_port_file" node --input-type=module <<'NODE' &
+          import { writeFile } from "node:fs/promises";
+          import { createServer } from "node:http";
+          const server = createServer((_request, response) => response.writeHead(404).end());
+          server.listen(0, "127.0.0.1", async () => {
+            await writeFile(process.env.REGISTRY_PORT_FILE, String(server.address().port));
+          });
+          NODE
+          registry_pid=$!
+          trap 'kill "$registry_pid" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 50); do test -s "$registry_port_file" && break; sleep 0.1; done
+          test -s "$registry_port_file"
+          registry_port="$(cat "$registry_port_file")"
+          REAL_NPM="$real_npm" CAPTURE_FILE="$capture_dir/argv" REGISTRY_PORT="$registry_port" node --input-type=module <<'NODE'
           import { readFile } from "node:fs/promises";
           import { spawnSync } from "node:child_process";
           const args = (await readFile(process.env.CAPTURE_FILE, "utf8")).trimEnd().split("\n");
           if (args[0] !== "publish" || args.includes("--publish")) throw new Error(`invalid captured npm argv: ${JSON.stringify(args)}`);
           if (!args[1].endsWith(".tgz") || !args[1].startsWith("/")) throw new Error("captured artifact path is not absolute");
-          const replay = spawnSync(process.env.REAL_NPM, [...args, "--dry-run"], { stdio: "inherit" });
+          if (!args.includes("--registry=https://registry.npmjs.org")) throw new Error("captured registry is not production npm");
+          // npm 12 checks the live registry even for publish --dry-run. Use a
+          // local 404 registry for the replay so this remains valid after the
+          // current version has already been published.
+          const replay = spawnSync(process.env.REAL_NPM, [...args, "--dry-run", `--registry=http://127.0.0.1:${process.env.REGISTRY_PORT}`], { stdio: "inherit" });
           if (replay.status !== 0) process.exit(replay.status ?? 1);
           NODE
           bad_args=(publish "$(sed -n '2p' "$capture_dir/argv")" --access public --registry=https://registry.npmjs.org --provenance --ignore-scripts --publish --dry-run)
