@@ -1,0 +1,11 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "project-mcp": {
+        "type": "local",
+        "command": ["node", "./path/to/your-project-mcp-server.mjs"]
+      }
+    }
+  }
+}

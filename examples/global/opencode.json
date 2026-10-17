@@ -1,0 +1,31 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugins": [
+    {
+      "package": "@bjorntech/key-ferry",
+      "options": {
+        "enabled": true,
+        "projectDirectory": "/absolute/path/to/global-varlock-project",
+        "projectConfig": {
+          "enabled": true,
+          "activation": "auto",
+          "file": ".opencode/key-ferry.jsonc"
+        },
+        "requireStrictEgress": true,
+        "servers": {
+          "global-mcp": {
+            "env": ["GLOBAL_API_KEY"]
+          }
+        }
+      }
+    }
+  ],
+  "mcp": {
+    "servers": {
+      "global-mcp": {
+        "type": "local",
+        "command": ["node", "./path/to/your-global-mcp-server.mjs"]
+      }
+    }
+  }
+}

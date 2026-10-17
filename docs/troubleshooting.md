@@ -75,7 +75,7 @@ An object supports an explicit mapping:
 
 The MCP server must already exist in `mcp.servers` and must be `type: "local"`.
 Remote or missing servers are not silently routed. Replace the illustrative
-command in `examples/opencode.jsonc` with a real local MCP command before
+command in `examples/single-project/opencode.json` with a real local MCP command before
 launching it; the example command is not an installed fixture.
 
 The server remains disabled when the sidecar is not ready, startup or refresh
@@ -212,3 +212,28 @@ That command is a gated synthetic compatibility check. The normal suite and
 live fixtures are separate verification layers; these commands do not certify
 production deployments, every external MCP provider, or a fully live OpenCode
 host/TUI session.
+
+## Global/project activation and readiness
+
+A native plugin being active does not mean its broker is ready. During startup,
+wait for the selected scope to report its ready phase; mapped servers remain
+fail-closed while it is starting. A disabled integration does not register the
+status RPC, so a status request returning 404 is expected rather than evidence
+of a broken Varlock backend.
+
+The generated RPC client already wraps input objects. Use `status({})` (and the
+same shape for refresh/doctor), not a manually double-wrapped payload. A 400 or
+404 from a bad probe does not prove the broker failed. Check the reported phase,
+wait for startup, then use explicit refresh or doctor for the selected active
+group. Status is pure and does not re-authenticate. Refresh and doctor do not
+activate an inactive or manual project; use `activateProject({})` first, or the
+project TUI command.
+
+Global and project groups are independent. A project file is eligible only when
+the global `projectConfig.enabled` option is explicitly true. Global automatic
+activation can be restricted to manual by the project file, but a project
+cannot override a global manual policy. Project mappings never inherit the
+global mapping set; duplicate names require explicit `overrides`, and unrelated
+global servers continue unchanged. Review project repositories before enabling
+automatic activation: this is an execution-policy convenience, not a sandbox or
+provider-authentication boundary.

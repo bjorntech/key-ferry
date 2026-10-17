@@ -5,6 +5,23 @@ import { KeyFerryRpc } from "./rpc.js";
 export interface SafeStatusView {
   readonly phase: string;
   readonly generation: number;
+  readonly activation?: "auto" | "manual" | "awaiting_activation";
+  readonly scopes?: readonly {
+    readonly scope: "global" | "project";
+    readonly phase: string;
+    readonly generation: number;
+    readonly activation?: "auto" | "manual" | "awaiting_activation";
+    readonly diagnostics?: readonly {
+      readonly server: string;
+      readonly code: string;
+      readonly message: string;
+    }[];
+    readonly error?: {
+      readonly code: string;
+      readonly message: string;
+      readonly retryable: boolean;
+    };
+  }[];
   readonly diagnostics?: readonly {
     readonly server: string;
     readonly code: string;
@@ -17,6 +34,9 @@ export interface TuiActions {
   readonly status: () => Promise<SafeStatusView>;
   readonly refresh: () => Promise<SafeStatusView>;
   readonly doctor: () => Promise<SafeStatusView>;
+  readonly activateProject?: () => Promise<SafeStatusView>;
+  readonly refreshProject?: () => Promise<SafeStatusView>;
+  readonly doctorProject?: () => Promise<SafeStatusView>;
   readonly show: (
     title: string,
     message: string,
@@ -46,59 +66,168 @@ const errorMessage = (error: unknown) => {
 };
 
 export function formatStatus(status: SafeStatusView): string {
-  const lines = status.error
-    ? [`${status.error.message} (${status.error.code})`]
-    : [`State: ${status.phase}`, `Generation: ${status.generation}`];
-  for (const item of status.diagnostics ?? [])
-    lines.push(`${item.server}: ${item.message} (${item.code})`);
+  const lines = formatOverview(status);
+  appendDiagnostics(lines, status.diagnostics);
+  for (const scope of status.scopes ?? []) lines.push(...formatScope(scope));
   return lines.join("\n");
 }
 
-export function createCommands(actions: TuiActions) {
-  const run =
-    (title: string, operation: () => Promise<SafeStatusView>, success: string) => async () => {
-      actions.show(title, "Working…", "info");
-      try {
-        const status = await operation();
-        actions.show(
-          title,
-          `${success}\n\n${formatStatus(status)}`,
-          status.error ? "warning" : "success",
-        );
-      } catch (error) {
-        actions.show(title, errorMessage(error), "error");
-      }
-    };
+function formatOverview(status: SafeStatusView): string[] {
+  return status.error
+    ? [`${status.error.message} (${status.error.code})`]
+    : [`State: ${status.phase}`, `Generation: ${status.generation}`];
+}
 
-  return [
-    {
-      id: "key-ferry.status",
-      title: "Key Ferry: Status",
-      description: "Show safe Key Ferry sidecar state",
-      group: "Varlock",
-      palette: true as const,
-      slash: { name: "key-ferry-status", aliases: ["vstatus"] as string[] },
-      run: run("Varlock status", actions.status, "Status loaded"),
-    },
-    {
-      id: "key-ferry.refresh",
-      title: "Key Ferry: Refresh",
-      description: "Refresh the protected project environment",
-      group: "Varlock",
-      palette: true as const,
-      slash: { name: "key-ferry-refresh", aliases: ["vrefresh"] as string[] },
-      run: run("Varlock refresh", actions.refresh, "Refresh completed"),
-    },
-    {
-      id: "key-ferry.doctor",
-      title: "Key Ferry: Doctor",
-      description: "Check Varlock readiness and protected connections",
-      group: "Varlock",
-      palette: true as const,
-      slash: { name: "key-ferry-doctor", aliases: ["vdoctor"] as string[] },
-      run: run("Varlock doctor", actions.doctor, "Check completed"),
-    },
-  ] as const;
+function appendDiagnostics(
+  lines: string[],
+  diagnostics: SafeStatusView["diagnostics"],
+  prefix?: string,
+) {
+  for (const item of diagnostics ?? [])
+    lines.push(`${prefix ? `${prefix}/` : ""}${item.server}: ${item.message} (${item.code})`);
+}
+
+function formatScope(scope: NonNullable<SafeStatusView["scopes"]>[number]): string[] {
+  const lines = [formatScopeHeader(scope)];
+  appendScopeError(lines, scope);
+  appendDiagnostics(lines, scope.diagnostics, scope.scope);
+  return lines;
+}
+
+function formatScopeHeader(scope: NonNullable<SafeStatusView["scopes"]>[number]): string {
+  const activation = scope.activation ? `, ${scope.activation}` : "";
+  return `${scope.scope}: ${scope.phase} (generation ${scope.generation}${activation})`;
+}
+
+function appendScopeError(
+  lines: string[],
+  scope: NonNullable<SafeStatusView["scopes"]>[number],
+): void {
+  if (scope.error) lines.push(`${scope.scope}: ${scope.error.message} (${scope.error.code})`);
+}
+
+type CommandOperation =
+  | "status"
+  | "refresh"
+  | "doctor"
+  | "activateProject"
+  | "refreshProject"
+  | "doctorProject";
+
+type CommandSpec = {
+  readonly id: string;
+  readonly title: string;
+  readonly description: string;
+  readonly slashName: string;
+  readonly alias: string;
+  readonly toastTitle: string;
+  readonly success: string;
+  readonly operation: CommandOperation;
+};
+
+const commandSpecs: readonly CommandSpec[] = [
+  {
+    id: "key-ferry.status",
+    title: "Key Ferry: Status",
+    description: "Show safe Key Ferry sidecar state",
+    slashName: "key-ferry-status",
+    alias: "vstatus",
+    toastTitle: "Varlock status",
+    success: "Status loaded",
+    operation: "status",
+  },
+  {
+    id: "key-ferry.refresh",
+    title: "Key Ferry: Refresh",
+    description: "Refresh the protected project environment",
+    slashName: "key-ferry-refresh",
+    alias: "vrefresh",
+    toastTitle: "Varlock refresh",
+    success: "Refresh completed",
+    operation: "refresh",
+  },
+  {
+    id: "key-ferry.doctor",
+    title: "Key Ferry: Doctor",
+    description: "Check Varlock readiness and protected connections",
+    slashName: "key-ferry-doctor",
+    alias: "vdoctor",
+    toastTitle: "Varlock doctor",
+    success: "Check completed",
+    operation: "doctor",
+  },
+  {
+    id: "key-ferry.project.activate",
+    title: "Key Ferry: Activate Project",
+    description: "Activate the protected project environment",
+    slashName: "key-ferry-project-activate",
+    alias: "vproject-activate",
+    toastTitle: "Varlock project activation",
+    success: "Project activation completed",
+    operation: "activateProject",
+  },
+  {
+    id: "key-ferry.project.refresh",
+    title: "Key Ferry: Refresh Project",
+    description: "Refresh the protected project environment",
+    slashName: "key-ferry-project-refresh",
+    alias: "vproject-refresh",
+    toastTitle: "Varlock project refresh",
+    success: "Project refresh completed",
+    operation: "refreshProject",
+  },
+  {
+    id: "key-ferry.project.doctor",
+    title: "Key Ferry: Doctor Project",
+    description: "Check project Varlock readiness",
+    slashName: "key-ferry-project-doctor",
+    alias: "vproject-doctor",
+    toastTitle: "Varlock project doctor",
+    success: "Project check completed",
+    operation: "doctorProject",
+  },
+];
+
+const unavailable = async (): Promise<SafeStatusView> => {
+  throw { code: "unavailable" };
+};
+
+function runCommand(
+  actions: TuiActions,
+  title: string,
+  operation: () => Promise<SafeStatusView>,
+  success: string,
+) {
+  return async () => {
+    actions.show(title, "Working…", "info");
+    try {
+      const status = await operation();
+      actions.show(
+        title,
+        `${success}\n\n${formatStatus(status)}`,
+        status.error ? "warning" : "success",
+      );
+    } catch (error) {
+      actions.show(title, errorMessage(error), "error");
+    }
+  };
+}
+
+function createCommand(spec: (typeof commandSpecs)[number], actions: TuiActions) {
+  const operation = actions[spec.operation] ?? unavailable;
+  return {
+    id: spec.id,
+    title: spec.title,
+    description: spec.description,
+    group: "Varlock",
+    palette: true as const,
+    slash: { name: spec.slashName, aliases: [spec.alias] as string[] },
+    run: runCommand(actions, spec.toastTitle, operation, spec.success),
+  };
+}
+
+export function createCommands(actions: TuiActions) {
+  return commandSpecs.map((spec) => createCommand(spec, actions));
 }
 
 export default Plugin.define({
@@ -121,6 +250,9 @@ export default Plugin.define({
         status: () => rpc.status({}) as Promise<SafeStatusView>,
         refresh: () => rpc.refresh({}) as Promise<SafeStatusView>,
         doctor: () => rpc.doctor({}) as Promise<SafeStatusView>,
+        activateProject: () => rpc.activateProject({}) as Promise<SafeStatusView>,
+        refreshProject: () => rpc.refresh({ scope: "project" }) as Promise<SafeStatusView>,
+        doctorProject: () => rpc.doctor({ scope: "project" }) as Promise<SafeStatusView>,
         show,
       }),
     }));

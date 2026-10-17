@@ -1,6 +1,6 @@
 # @bjorntech/key-ferry
 
-Project-scoped Key Ferry credential proxy integration for OpenCode V2.
+Global and project-scoped Key Ferry credential proxy integration for OpenCode V2.
 
 ## What it protects
 
@@ -45,7 +45,7 @@ native OpenCode V2 package types and Effect 4.0.1.
 ## Installation
 
 OpenCode installs configured npm plugins automatically. Add the package to the
-global OpenCode plugin configuration (normally `~/.config/opencode/opencode.jsonc`)
+global OpenCode plugin configuration (normally `~/.config/opencode/opencode.json`)
 and preserve any unrelated entries already there:
 
 ```jsonc
@@ -87,9 +87,9 @@ brew install dmno-dev/tap/varlock
 varlock --version
 ```
 
-If Homebrew is unavailable, use the pinned Varlock 1.23.0 installer from the
-official Varlock source and ensure the resulting `varlock` executable is on
-`PATH`. The plugin does not install Varlock or unlock a secret store.
+The plugin does not install Varlock or unlock a secret store. Configure its
+environment and authentication separately, following the
+[Varlock documentation](https://varlock.dev/).
 
 The package's sibling `./tui` export is discovered automatically when the
 server plugin is loaded. Do not add a duplicate `cli.json` entry for an
@@ -97,10 +97,61 @@ ordinary server-plugin installation. A global `cli.json` entry is only useful
 for a CLI-only deployment or a CLI connected to a remote OpenCode server that
 already loaded the server plugin.
 
-Set `projectDirectory` to the project root containing the schema, or to a
-central Varlock configuration directory such as `~/.config/key-ferry`. It does
-not need to be a Git repository. The plugin starts and owns its Varlock sidecar
-itself; do not wrap OpenCode or manually run `varlock proxy`.
+Set `projectDirectory` to the Varlock project root containing the schema. The
+plugin starts and owns its Varlock sidecar itself; do not wrap OpenCode or
+manually run `varlock proxy`.
+
+## Global configuration and project opt-in
+
+The native plugin entry can be installed once in OpenCode's global configuration.
+Set `projectConfig.enabled` to `true` to make a project file eligible; it is
+`false` by default for backwards compatibility. The global configuration owns
+one Varlock group and its mappings. A project at the current OpenCode project
+root can add a second, independent group in
+`.opencode/key-ferry.jsonc`:
+
+```jsonc
+{
+  "enabled": true,
+  "servers": {
+    "project-mcp": { "env": ["PROJECT_API_KEY"] }
+  }
+}
+```
+
+Use [the global example](examples/global/opencode.json), the
+[project native example](examples/project/opencode.json), and the
+[project mapping example](examples/project/.opencode/key-ferry.jsonc) as copyable
+shapes. The project file only maps MCP servers that already exist in the
+project's native OpenCode configuration; it does not define or install an MCP
+server, and it does not need a second Key Ferry plugin entry. The paired
+[native project example](examples/project/opencode.json) shows that separate
+definition. The
+synthetic `GLOBAL_API_KEY` and `PROJECT_API_KEY` names are schema references,
+not credentials; configure each Varlock root and its secret source separately
+using the [Varlock documentation](https://varlock.dev/). The project file is
+read relative to the canonical project root, not the service
+working directory, and its optional `projectDirectory` must remain inside that
+root. It contains project mappings only: global mappings, environment keys, and
+Varlock schema are never imported or unioned. Project mappings that reuse a
+global server name must list that name in `overrides`; otherwise the collision
+is rejected. Other globally bound servers are unaffected.
+
+The global `projectConfig.activation` policy is a floor. `"auto"` activates an
+eligible project automatically; `"manual"` requires the explicit
+`key-ferry.activateProject` command. A project may restrict automatic global
+activation with its own `"activation": "manual"`, but cannot escalate a manual
+global policy. Manual activation is in-memory for the current location and is
+not a stored enrollment list. Status is pure and reports all configured scopes,
+including an inactive project scope. Default refresh and doctor retain their
+global behavior; scoped project operations act only on the selected active
+project group and never activate it. Use `activateProject` first when the
+project is awaiting activation.
+
+This opt-in is an execution policy, not an authentication or security boundary.
+Varlock providers and `@exec` can execute code, and an untrusted repository is
+not sandboxed by this feature. Review project files before enabling global
+automatic activation.
 
 ## Configuration
 
@@ -133,8 +184,12 @@ are rejected. Literal local/private IP targets are rejected unless the
 explicit `allowPrivateNetwork: true` policy is set. Normal corporate DNS
 names are not rejected merely because they may resolve internally.
 
-Use `examples/.env.schema` for synthetic strict-egress values only. Mark each
-remote upstream host with `@proxy(domain="...")` and keep
+Use `examples/single-project/.env.schema` only for the legacy single-root example. For the
+global/project setup, copy `examples/global/.env.schema` into the configured
+global Varlock root and `examples/project/.env.schema` into the project's
+separate Varlock root. Do not reuse one combined schema or work around this
+separation with Varlock imports: Varlock loads the full schema before Key Ferry
+filters requested keys. Mark each remote upstream host with `@proxy(domain="...")` and keep
 `@proxyConfig={egress="strict"}`. Configure any secret source through Varlock;
 Key Ferry does not install Varlock, create its schema, or configure provider
 authentication. Never commit a real secret.
@@ -146,15 +201,26 @@ authentication. Never commit a real secret.
 | `key-ferry.status` | `/key-ferry-status` | `status` |
 | `key-ferry.refresh` | `/key-ferry-refresh` | `refresh` |
 | `key-ferry.doctor` | `/key-ferry-doctor` | `doctor` |
+| `key-ferry.project.activate` | `/key-ferry-project-activate` | `activateProject` |
+| `key-ferry.project.refresh` | `/key-ferry-project-refresh` | `refresh({ scope: "project" })` |
+| `key-ferry.project.doctor` | `/key-ferry-project-doctor` | `doctor({ scope: "project" })` |
 
 The rename is intentionally breaking for the 0.1.0 release: no `varlock-*`
 command aliases are retained.
 
 Refresh and doctor report safe lifecycle and remote-configuration diagnostics.
-They do not provide credential prompts or collect credentials. Doctor can
+Project commands select the active project group; they do not activate an
+inactive project. `activateProject` starts an eligible manual project once for
+the current location. They do not provide credential prompts or collect
+credentials. Doctor can
 reconcile or recreate unhealthy selected `oauth:false` remote relays after
 Varlock readiness succeeds, so authentication still depends on the configured
 Varlock context.
+
+Native plugin activation does not imply broker readiness. During startup,
+mapped servers remain fail-closed until their group is ready; a healthy group
+continues if another group fails. A disabled integration does not register
+status RPC, so a 404 is expected.
 
 ## Transport and lifecycle limits
 
@@ -207,4 +273,4 @@ OpenCode TUI session.
 See [Architecture](docs/architecture.md),
 [Troubleshooting](docs/troubleshooting.md), and
 [Quality checks](docs/quality.md),
-[the example configuration](examples/opencode.jsonc).
+[the single-project example](examples/single-project/opencode.json), [the global configuration example](examples/global/opencode.json), and [the project file example](examples/project/.opencode/key-ferry.jsonc).

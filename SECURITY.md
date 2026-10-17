@@ -67,6 +67,26 @@ are covered by the project verification commands. Opt-in fixture results do not
 constitute production certification, compatibility with every external MCP
 provider, or a fully live OpenCode host/TUI session.
 
+## Global project configuration
+
+A globally installed plugin can opt into loading a project-local
+`.opencode/key-ferry.jsonc`, but `projectConfig.enabled` defaults to false.
+Enabling it is a conscious workspace execution policy: project Varlock
+providers and `@exec` may execute code, and this feature does not sandbox an
+untrusted repository or authenticate it. Review project files before choosing
+global automatic activation.
+
+Global and project managers, Varlock roots, mappings, and environment keysets
+remain separate. Project configuration does not import global mappings or
+credentials. A project directory selector is restricted to the canonical
+project root. Manual activation is held only in memory for the current
+location; it is not an enrollment or allowlist mechanism.
+
+Keep the Varlock schemas for those roots separate as well. Varlock loads a
+schema before Key Ferry filters the requested environment keys, so a combined
+schema would make both roots resolve every definition even though the broker
+mappings remain separate.
+
 ## Reporting a vulnerability
 
 Report vulnerabilities through the repository's GitHub security reporting

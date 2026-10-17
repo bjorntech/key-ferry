@@ -2,8 +2,6 @@
   "$schema": "https://opencode.ai/config.json",
   "plugins": [
     {
-      // Merge this entry into your existing config; preserve unrelated
-      // plugins and MCP servers.
       "package": "@bjorntech/key-ferry",
       "options": {
         "enabled": true,
@@ -14,31 +12,34 @@
         "requireStrictEgress": true,
         "servers": {
           "example-local-mcp": {
-            "env": ["FAKE_API_KEY"],
+            "env": ["FAKE_API_KEY"]
           },
           "example-remote-mcp": {
             "remote": {
               "headers": {
-                "Authorization": { "env": "REMOTE_API_KEY", "prefix": "Bearer " },
-                "X-Tenant": "REMOTE_TENANT",
-              },
-            },
-          },
-        },
-      },
-    },
+                "Authorization": {
+                  "env": "REMOTE_API_KEY",
+                  "prefix": "Bearer "
+                },
+                "X-Tenant": "REMOTE_TENANT"
+              }
+            }
+          }
+        }
+      }
+    }
   ],
   "mcp": {
     "servers": {
       "example-local-mcp": {
         "type": "local",
-        "command": ["node", "./path/to/your-mcp-server.mjs"],
+        "command": ["node", "./path/to/your-mcp-server.mjs"]
       },
       "example-remote-mcp": {
         "type": "remote",
         "url": "https://mcp.example.test/mcp",
-        "oauth": false,
-      },
-    },
-  },
+        "oauth": false
+      }
+    }
+  }
 }

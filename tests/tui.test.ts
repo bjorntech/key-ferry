@@ -17,12 +17,18 @@ describe("Key Ferry TUI commands", () => {
       "key-ferry.status",
       "key-ferry.refresh",
       "key-ferry.doctor",
+      "key-ferry.project.activate",
+      "key-ferry.project.refresh",
+      "key-ferry.project.doctor",
     ]);
     expect(commands.every((command) => command.palette)).toBe(true);
     expect(commands.map((command) => command.slash.name)).toEqual([
       "key-ferry-status",
       "key-ferry-refresh",
       "key-ferry-doctor",
+      "key-ferry-project-activate",
+      "key-ferry-project-refresh",
+      "key-ferry-project-doctor",
     ]);
     expect(formatStatus(status)).toContain("Generation: 2");
   });
@@ -78,6 +84,31 @@ describe("Key Ferry TUI commands", () => {
     });
     expect(formatted).toContain("Varlock operation timed out (timeout)");
     expect(formatted).toContain("remote-tools: mapping is incomplete (remote_missing_placeholder)");
+  });
+
+  test("formats global and project scope status, including manual activation", () => {
+    const formatted = formatStatus({
+      phase: "partial",
+      generation: 8,
+      activation: "awaiting_activation",
+      scopes: [
+        { scope: "global", phase: "ready", generation: 7, activation: "auto" },
+        {
+          scope: "project",
+          phase: "partial",
+          generation: 8,
+          activation: "manual",
+          error: { code: "not_ready", message: "Project activation is required", retryable: true },
+          diagnostics: [
+            { server: "project-tools", code: "partial", message: "awaiting activation" },
+          ],
+        },
+      ],
+    });
+    expect(formatted).toContain("global: ready (generation 7, auto)");
+    expect(formatted).toContain("project: partial (generation 8, manual)");
+    expect(formatted).toContain("project: Project activation is required (not_ready)");
+    expect(formatted).toContain("project/project-tools: awaiting activation (partial)");
   });
 
   test("uses safe fallback text for every RPC failure shape", async () => {
@@ -148,7 +179,7 @@ describe("Key Ferry TUI commands", () => {
     const cleanup = await tuiPlugin.setup(context as never);
     expect(cleanup).toBeUndefined();
     expect(layers).toHaveLength(1);
-    expect(layers[0]().commands).toHaveLength(3);
+    expect(layers[0]().commands).toHaveLength(6);
     expect(calls).toEqual([]);
   });
 
@@ -175,5 +206,46 @@ describe("Key Ferry TUI commands", () => {
     expect(toasts).toHaveLength(2);
     expect(toasts[0]).toMatchObject({ title: "Varlock doctor", variant: "info" });
     expect(toasts[1]).toMatchObject({ title: "Varlock doctor", variant: "success" });
+  });
+
+  test("keeps all six command RPC payloads explicit and ordered", async () => {
+    const calls: Array<[string, Record<string, string>]> = [];
+    const rpc = {
+      status: async (payload: Record<string, string>) => {
+        calls.push(["status", payload]);
+        return status;
+      },
+      refresh: async (payload: Record<string, string>) => {
+        calls.push(["refresh", payload]);
+        return status;
+      },
+      doctor: async (payload: Record<string, string>) => {
+        calls.push(["doctor", payload]);
+        return status;
+      },
+      activateProject: async (payload: Record<string, string>) => {
+        calls.push(["activateProject", payload]);
+        return status;
+      },
+    };
+    const commands = createCommands({
+      status: () => rpc.status({}),
+      refresh: () => rpc.refresh({}),
+      doctor: () => rpc.doctor({}),
+      activateProject: () => rpc.activateProject({}),
+      refreshProject: () => rpc.refresh({ scope: "project" }),
+      doctorProject: () => rpc.doctor({ scope: "project" }),
+      show: () => undefined,
+    });
+
+    await Promise.all(commands.map((command) => command.run()));
+    expect(calls).toEqual([
+      ["status", {}],
+      ["refresh", {}],
+      ["doctor", {}],
+      ["activateProject", {}],
+      ["refresh", { scope: "project" }],
+      ["doctor", { scope: "project" }],
+    ]);
   });
 });

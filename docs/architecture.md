@@ -160,7 +160,8 @@ OpenCode host/TUI run.
    state transitions, fail-closed readiness, refresh, and acquire/release.
 4. `src/plugin.ts`: native V2 plugin layer, local/remote MCP transforms, RPC,
    relay lifecycle, and cleanup.
-5. `src/rpc.ts`: secret-free status and refresh RPC definitions.
+5. `src/rpc.ts`: secret-free status, refresh, doctor, and activateProject RPC
+   definitions.
 6. `src/options.ts`: validation of explicit project-scoped configuration.
 7. `src/tui.ts`: optional status/refresh UX over the RPC shape.
 8. `src/remote.ts`: adapter-side remote relay contract, target/header
@@ -177,3 +178,28 @@ ambient environment variables.
 Cleanup is scope-owned and project-owned: it stops only the sidecar and relay
 resources acquired by this plugin instance. It does not perform a global
 Varlock shutdown and does not claim full sandbox isolation.
+
+## Global and project scopes
+
+The plugin may be installed once in native global OpenCode configuration. Its
+`projectConfig.enabled` option is `false` by default, preserving the original
+single-project behavior. When enabled, the loader reads the optional
+`.opencode/key-ferry.jsonc` from the canonical current project root. The global
+and project scopes have independent Varlock roots, managers, mappings, and
+keysets; project configuration never imports or unions global mappings.
+
+Project `servers` use the same validated mapping shape as native plugin
+options. Reusing a global server name requires listing it in `overrides`; other
+name collisions fail closed. `projectDirectory`, when present in the project
+file, must resolve within the canonical project root. The global activation
+policy is a floor: global manual policy cannot be escalated by a project, and
+project manual policy can restrict global auto activation. Manual activation is
+an in-memory current-location action, not an enrollment store.
+
+A registry deduplicates identical global managers across contexts while keeping
+project managers local. Broker startup is readiness-gated: protected MCP
+servers remain disabled while a group starts, and a failure in one group does
+not stop a healthy group. File watching and configuration reload are local to
+the project group. Status, refresh, and doctor do not activate inactive groups;
+`activateProject` is the explicit one-time activation operation for a manual
+project.

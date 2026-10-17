@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.9 — 2026-10-17
+
+### Added
+
+- Added opt-in global-to-project configuration loading with independent global
+  and project Varlock brokers, explicit activation policy, scoped RPC/TUI
+  controls, and fail-closed project name collision handling.
+- Added public global/project configuration examples while preserving the
+  existing single-project example and mapping shape.
+
 ## 0.1.8 — 2026-10-17
 
 This patch release shares compatible Varlock broker state across configured

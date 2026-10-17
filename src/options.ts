@@ -45,6 +45,15 @@ export interface ValidatedOptions {
   readonly manager: Omit<KeyFerryPluginOptions, "adapter"> & {
     readonly adapter: VarlockAdapterOptions;
   };
+  readonly projectConfig: ProjectConfigOptions;
+}
+
+export type ProjectConfigActivation = "auto" | "manual";
+
+export interface ProjectConfigOptions {
+  readonly enabled: boolean;
+  readonly activation: ProjectConfigActivation;
+  readonly file: string;
 }
 
 const DEFAULT_STARTUP_TIMEOUT_MS = 30_000;
@@ -209,6 +218,33 @@ function readBoolean(input: Record<string, unknown>, name: string, fallback: boo
   return value;
 }
 
+function normalizeProjectConfig(input: Record<string, unknown>): ProjectConfigOptions {
+  const value = input.projectConfig;
+  if (value === undefined) return defaultProjectConfig();
+  if (!isRecord(value)) throw new TypeError("projectConfig must be an object");
+  return readProjectConfig(value);
+}
+
+function defaultProjectConfig(): ProjectConfigOptions {
+  return { enabled: false, activation: "auto", file: ".opencode/key-ferry.jsonc" };
+}
+
+function readActivation(value: unknown): ProjectConfigActivation {
+  const activation = value ?? "auto";
+  if (activation !== "auto" && activation !== "manual")
+    throw new TypeError("projectConfig.activation must be auto or manual");
+  return activation;
+}
+
+function readProjectConfig(value: Record<string, unknown>): ProjectConfigOptions {
+  const enabled = readBoolean(value, "enabled", false);
+  const activation = readActivation(value.activation);
+  const file = value.file ?? ".opencode/key-ferry.jsonc";
+  if (typeof file !== "string" || file.length === 0 || file.startsWith("/") || file.includes("\0"))
+    throw new TypeError("projectConfig.file must be a relative path");
+  return { enabled, activation, file };
+}
+
 function readTimeout(
   input: Record<string, unknown>,
   name: string,
@@ -299,6 +335,7 @@ function makeValidatedOptions(
   enabled: boolean,
   projectDirectory: ProjectDirectory | undefined,
   adapter: VarlockAdapterOptions,
+  projectConfig: ProjectConfigOptions,
 ): ValidatedOptions {
   const manager: ValidatedOptions["manager"] = {
     enabled,
@@ -310,6 +347,7 @@ function makeValidatedOptions(
     ...(projectDirectory === undefined ? {} : { projectDirectory }),
     adapter,
     manager,
+    projectConfig,
   };
 }
 
@@ -329,7 +367,7 @@ export function parseOptions(
   const enabled = readBoolean(input, "enabled", true);
   const adapter = normalizeAdapter(input);
   const projectDirectory = resolveProjectDirectory(input, directory, resolveDirectory);
-  return makeValidatedOptions(enabled, projectDirectory, adapter);
+  return makeValidatedOptions(enabled, projectDirectory, adapter, normalizeProjectConfig(input));
 }
 
 export function managerOptions(

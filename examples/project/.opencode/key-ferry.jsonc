@@ -1,0 +1,10 @@
+{
+  // Copy this file to the project root at .opencode/key-ferry.jsonc.
+  // The project group is additive: it never imports global mappings.
+  "enabled": true,
+  "servers": {
+    "project-mcp": {
+      "env": ["PROJECT_API_KEY"],
+    },
+  },
+}

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { Schema } from "effect";
 import { VarlockError, projectDirectory } from "../src/contracts.js";
-import { publicMessage, rpcError, sanitizeStatus } from "../src/rpc.js";
+import { SafeStatusSchema, publicMessage, rpcError, sanitizeStatus } from "../src/rpc.js";
 
 describe("safe Varlock RPC data", () => {
   test("redacts adapter error text while retaining actionable state", () => {
@@ -87,5 +88,63 @@ describe("safe Varlock RPC data", () => {
     expect(status.error?.retryable).toBe(false);
     expect(status.pid).toBe(42);
     expect(status.endpoint).toBe("http://127.0.0.1:9999");
+  });
+
+  test("uses only canonical diagnostic messages for root and scoped statuses", () => {
+    const canary = "FAKE_PRIVATE_ENV=https://fake.invalid/admin capability=admin";
+    const status = sanitizeStatus({
+      phase: "degraded",
+      projectDirectory: projectDirectory("/project"),
+      generation: 2,
+      diagnostics: [{ code: "remote_oauth_required", server: "relay", message: canary }],
+      scopes: [
+        {
+          scope: "project",
+          projectDirectory: projectDirectory("/project"),
+          phase: "failed",
+          generation: 3,
+          diagnostics: [{ code: "unknown_code", server: "relay", message: canary }],
+          error: { code: "refresh_failed", message: canary, retryable: true },
+          activation: "manual",
+        },
+      ],
+    });
+
+    const encoded = JSON.stringify(status);
+    expect(encoded).not.toContain(canary);
+    expect(status.diagnostics?.[0]?.message).toContain("oauth:false");
+    expect(status.scopes?.[0]?.diagnostics?.[0]?.message).toBe(
+      "Diagnostic information is unavailable",
+    );
+    expect(status.scopes?.[0]?.error?.message).toBe("Varlock refresh failed");
+    expect(status.scopes?.[0]?.phase).toBe("failed");
+    expect(status.scopes?.[0]?.generation).toBe(3);
+  });
+
+  test("uses the static fallback for inherited diagnostic property names", () => {
+    for (const code of ["__proto__", "constructor", "toString"]) {
+      const status = sanitizeStatus({
+        phase: "degraded",
+        projectDirectory: projectDirectory("/project"),
+        generation: 1,
+        diagnostics: [{ code, server: "relay", message: "FAKE" }],
+        scopes: [
+          {
+            scope: "project",
+            projectDirectory: projectDirectory("/project"),
+            phase: "ready",
+            generation: 2,
+            diagnostics: [{ code, server: "relay", message: "FAKE" }],
+          },
+        ],
+      });
+      expect(status.diagnostics?.[0]?.message).toBe("Diagnostic information is unavailable");
+      expect(status.scopes?.[0]?.diagnostics?.[0]?.message).toBe(
+        "Diagnostic information is unavailable",
+      );
+      expect(typeof status.diagnostics?.[0]?.message).toBe("string");
+      expect(Schema.encodeSync(SafeStatusSchema)(status)).toBeDefined();
+      expect(JSON.stringify(status)).not.toContain("FAKE");
+    }
   });
 });

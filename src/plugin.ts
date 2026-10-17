@@ -1,28 +1,23 @@
 import { Mcp, Plugin } from "@opencode/plugin/effect";
-import { Effect, Scope, Stream, Types } from "effect";
-import { brokerRegistry, type BrokerLease, type BrokerRegistry } from "./broker-registry.js";
+import { Effect, Types } from "effect";
+import { brokerRegistry, type BrokerRegistry } from "./broker-registry.js";
 import type {
   ProjectKeyFerryManagerFactory,
   ResolvedEnvironment,
   SafeStatus,
 } from "./contracts.js";
-import {
-  managerOptions,
-  parseOptions,
-  type ServerProtection,
-  type ValidatedOptions,
-} from "./options.js";
+import { parseOptions, type ServerProtection, type ValidatedOptions } from "./options.js";
 import {
   makeRemoteRelayCoordinator,
   RELAY_AUTH_HEADER,
   safeForwardHeaders,
   isRemoteProtection,
-  type RemoteDiagnostic,
   type RemoteRelayFactory,
   type RemoteRelayHandle,
-  type RemoteServerSnapshot,
 } from "./remote.js";
 import { KeyFerryRpc, publicMessage, rpcError, sanitizeStatus } from "./rpc.js";
+import { loadScopedConfiguration } from "./scoped-config.js";
+import { makeScopedController } from "./scoped-controller.js";
 
 export interface McpEditor {
   list(): readonly [string, Types.DeepMutable<Mcp.ServerConfig>][];
@@ -35,6 +30,11 @@ export interface ProtectionState {
   readonly environment: ResolvedEnvironment;
   readonly remoteHandles?: ReadonlyMap<string, RemoteRelayHandle>;
   readonly explicitlyDisabled?: ReadonlySet<string>;
+}
+
+export interface ManagedEnvironmentState {
+  readonly original: Readonly<Record<string, string | undefined>>;
+  readonly injected: Readonly<Record<string, string>>;
 }
 
 function preserveDisabled(name: string, server: Mcp.ServerConfig, state: ProtectionState): boolean {
@@ -140,24 +140,6 @@ export function applyProtection(
   }
 }
 
-function snapshotServers(editor: McpEditor): ReadonlyMap<string, RemoteServerSnapshot> {
-  const result = new Map<string, RemoteServerSnapshot>();
-  for (const [name, config] of editor.list()) {
-    if (config.type !== "remote") continue;
-    result.set(name, {
-      type: "remote",
-      url: config.url,
-      ...(config.headers === undefined ? {} : { headers: { ...config.headers } }),
-      ...(config.oauth === undefined ? {} : { oauth: config.oauth }),
-      ...(config.disabled === undefined ? {} : { disabled: config.disabled }),
-      ...(config.codemode === undefined ? {} : { codemode: config.codemode }),
-      ...(config.timeout === undefined ? {} : { timeout: config.timeout }),
-      ...(config.protocol === undefined ? {} : { protocol: config.protocol }),
-    });
-  }
-  return result;
-}
-
 export type HealthPollDecision = "noop" | "clear" | "reconcile";
 
 function unavailableHealthDecision(ready: boolean, remoteHandleCount: number): HealthPollDecision {
@@ -217,248 +199,63 @@ export function makePlugin(
       if (!parsed.enabled) return Effect.void;
       const program = Effect.gen(function* () {
         const pluginScope = yield* Effect.scope;
-        const brokerOptions = managerOptions(parsed, ctx.location.project.directory);
-        const lease: BrokerLease = yield* registry.acquire(factory, brokerOptions) as Effect.Effect<
-          BrokerLease,
-          never,
-          never
-        >;
-        yield* Effect.addFinalizer(() => lease.release);
-        let state: ProtectionState = { ready: false, environment: {} };
-        let observedGeneration = -1;
-        let remoteDiagnostics: readonly RemoteDiagnostic[] = [];
-        let serverSnapshots: ReadonlyMap<string, RemoteServerSnapshot> = new Map();
-        let explicitlyDisabled = new Set<string>();
-        let capturedDisabled = false;
-        const remote = makeRemoteRelayCoordinator(relayFactory, parsed.adapter.allowPrivateNetwork);
-        const setState = (next: ProtectionState) => {
-          state = { ...next, explicitlyDisabled };
-        };
-        const publicStatus = (status: SafeStatus): SafeStatus =>
-          sanitizeStatus({
-            ...status,
-            ...(remoteDiagnostics.length === 0 ? {} : { diagnostics: remoteDiagnostics }),
-          });
-        const reconcileRemote = (
-          status: SafeStatus,
-          environment: Readonly<Record<string, string>>,
-        ) =>
-          Effect.gen(function* () {
-            // A health failure may have stopped and removed the current handles.
-            // Reconcile from the manager capability again during doctor, rather
-            // than treating doctor as a metadata-only operation.
-            if (status.phase === "ready") {
-              if (!(yield* remote.health)) yield* remote.stopAll;
-              yield* Effect.provideService(
-                remote.reconcile(
-                  serverSnapshots,
-                  parsed.adapter.servers,
-                  environment,
-                  status.generation,
-                ),
-                Scope.Scope,
-                pluginScope,
-              );
-            } else {
-              yield* remote.stopAll;
-            }
-            remoteDiagnostics = remote.diagnostics;
-            const next = {
-              ready: status.phase === "ready",
-              environment,
-              remoteHandles: remote.handles,
-            };
-            setState(next);
-            return next;
-          });
-        yield* ctx.mcp.transform((editor) => {
-          if (!capturedDisabled) {
-            explicitlyDisabled = new Set(
-              editor
-                .list()
-                .filter(([, config]) => config.disabled === true)
-                .map(([name]) => name),
-            );
-            capturedDisabled = true;
-          }
-          serverSnapshots = snapshotServers(editor);
-          applyProtection(editor, parsed.adapter, {
-            ...state,
-            explicitlyDisabled,
-            remoteHandles: remote.handles,
-          });
-        });
-
-        const failClosed = Effect.gen(function* () {
-          setState({ ready: false, environment: {}, remoteHandles: remote.handles });
-          yield* remote.stopAll;
-          yield* ctx.mcp.reload();
-        });
-        const observeReady = lease.ensureReady.pipe(
-          Effect.flatMap((result) =>
-            Effect.gen(function* () {
-              if (result.status.generation <= observedGeneration) return;
-              yield* reconcileRemote(result.status, result.environment);
-              observedGeneration = result.status.generation;
-              yield* ctx.mcp.reload();
-            }),
-          ),
-          Effect.catch(() => failClosed),
+        const configuration = yield* Effect.promise(() =>
+          loadScopedConfiguration(ctx.options, { project: ctx.location.project }),
         );
-        const observeChanges = Effect.gen(function* () {
-          const subscription = yield* lease.subscribe;
-          yield* Stream.runForEach(subscription.changes, (status) =>
-            status.phase === "ready"
-              ? lease.environment.pipe(
-                  Effect.flatMap((environment) =>
-                    status.generation > observedGeneration
-                      ? Effect.gen(function* () {
-                          yield* reconcileRemote(status, environment);
-                          observedGeneration = status.generation;
-                          yield* ctx.mcp.reload();
-                        })
-                      : Effect.void,
-                  ),
-                )
-              : failClosed,
-          );
+        let controller: ReturnType<typeof makeScopedController> | undefined;
+        yield* ctx.mcp.transform((next) => {
+          if (controller) {
+            controller.setEditor(next);
+            controller.apply(next);
+          } else {
+            controller = makeScopedController({
+              configuration,
+              factory,
+              relayFactory,
+              registry,
+              scope: pluginScope,
+              reload: ctx.mcp.reload,
+              editor: next,
+              startEmptyGlobal: !parsed.projectConfig.enabled,
+            });
+            controller.capture(next);
+            controller.apply(next);
+          }
         });
-        yield* Effect.forkScoped(observeReady);
-        yield* Effect.forkScoped(observeChanges.pipe(Effect.catch(() => Effect.void)));
+        if (!controller) return;
+        const activeController = controller;
+        yield* Effect.addFinalizer(() => activeController.dispose);
+        yield* activeController.start;
+        if (parsed.projectConfig.enabled)
+          yield* activeController.watch(() =>
+            loadScopedConfiguration(ctx.options, { project: ctx.location.project }),
+          );
         yield* ctx.mcp.reload();
-
-        const explicitRecovery = (operation: "refresh" | "doctor") =>
-          Effect.gen(function* () {
-            const status = yield* lease.status;
-            if (status.phase === "failed") {
-              yield* failClosed;
-              return yield* registry.retry(factory, brokerOptions) as Effect.Effect<
-                { readonly status: SafeStatus; readonly environment: ResolvedEnvironment },
-                import("./contracts.js").VarlockError,
-                never
-              >;
-            }
-            if (status.phase === "starting") return yield* lease.ensureReady;
-            return yield* operation === "refresh" ? lease.refreshReady : lease.ensureReady;
-          });
-
         yield* ctx.rpc.register(KeyFerryRpc, {
-          status: () => lease.status.pipe(Effect.map(publicStatus)),
-          refresh: (_, context) =>
-            Effect.gen(function* () {
-              setState({ ready: false, environment: {}, remoteHandles: remote.handles });
-              yield* remote.stopAll;
-              yield* ctx.mcp.reload();
-              const next = yield* explicitRecovery("refresh");
-              yield* reconcileRemote(next.status, next.environment);
-              yield* ctx.mcp.reload();
-              return publicStatus(next.status);
-            }).pipe(
+          status: (input) =>
+            activeController.statusSelected(input).pipe(Effect.map(sanitizeStatus)),
+          refresh: (input, context) =>
+            activeController.operation("refresh", input).pipe(
+              Effect.map(sanitizeStatus),
               Effect.catch((error) =>
-                Effect.sync(() => {
-                  remoteDiagnostics = remote.diagnostics;
-                  setState({ ready: false, environment: {}, remoteHandles: remote.handles });
-                }).pipe(
-                  Effect.andThen(ctx.mcp.reload()),
-                  Effect.andThen(
-                    Effect.fail(
-                      context.error("unavailable", publicMessage(error), rpcError(error)),
-                    ),
-                  ),
-                ),
+                Effect.fail(context.error("unavailable", publicMessage(error), rpcError(error))),
               ),
             ),
-          doctor: (_, context) =>
-            Effect.gen(function* () {
-              const next = yield* explicitRecovery("doctor").pipe(
-                Effect.map(({ status, environment }) => ({
-                  status: sanitizeStatus(status),
-                  environment,
-                })),
-                Effect.catch((error) =>
-                  lease.status.pipe(
-                    Effect.map((status) => ({
-                      status: sanitizeStatus({ ...status, error }),
-                      environment: {},
-                    })),
-                  ),
-                ),
-              );
-              yield* reconcileRemote(next.status, next.environment);
-              yield* ctx.mcp.reload();
-              return publicStatus(next.status);
-            }).pipe(
+          doctor: (input, context) =>
+            activeController.operation("doctor", input).pipe(
+              Effect.map(sanitizeStatus),
+              Effect.catch((error) =>
+                Effect.fail(context.error("unavailable", publicMessage(error), rpcError(error))),
+              ),
+            ),
+          activateProject: (_, context) =>
+            activeController.activateProject.pipe(
+              Effect.map(sanitizeStatus),
               Effect.catch((error) =>
                 Effect.fail(context.error("unavailable", publicMessage(error), rpcError(error))),
               ),
             ),
         });
-
-        const clearProtection = Effect.gen(function* () {
-          setState({ ready: false, environment: {}, remoteHandles: remote.handles });
-          yield* remote.stopAll;
-          yield* ctx.mcp.reload();
-        });
-        const reconcileGeneration = (status: SafeStatus) =>
-          Effect.gen(function* () {
-            yield* remote.stopAll;
-            const next = yield* lease.ensureReady.pipe(
-              Effect.map(({ status, environment }) => ({
-                status: sanitizeStatus(status),
-                environment,
-              })),
-            );
-            observedGeneration = next.status.generation;
-            if (next.status.phase === "ready") {
-              yield* Effect.provideService(
-                remote.reconcile(
-                  serverSnapshots,
-                  parsed.adapter.servers,
-                  next.environment,
-                  next.status.generation,
-                ),
-                Scope.Scope,
-                pluginScope,
-              );
-              remoteDiagnostics = remote.diagnostics;
-            }
-            setState({
-              ready: next.status.phase === "ready",
-              environment: next.environment,
-              remoteHandles: remote.handles,
-            });
-            yield* ctx.mcp.reload();
-          });
-
-        // The manager owns process health. Poll only safe metadata and disable
-        // protected servers immediately if the owned process dies. A changed
-        // generation gets a fresh, allowlisted environment before reconnecting.
-        yield* Effect.forkScoped(
-          Effect.forever(
-            Effect.gen(function* () {
-              yield* Effect.sleep("30 seconds");
-              const status = yield* lease.status;
-              const relayHealthy = yield* status.phase !== "ready"
-                ? Effect.succeed(false)
-                : remote.health;
-              const decision = healthPollDecision(
-                status.phase,
-                state.ready,
-                remote.handles.size,
-                relayHealthy,
-                status.generation,
-                observedGeneration,
-              );
-              const action = {
-                noop: Effect.void,
-                clear: clearProtection,
-                reconcile: reconcileGeneration(status).pipe(Effect.catch(() => Effect.void)),
-              } satisfies Record<HealthPollDecision, Effect.Effect<void>>;
-              yield* action[decision];
-            }),
-          ).pipe(Effect.catch(() => Effect.void)),
-        );
-        yield* Effect.addFinalizer(() => remote.stopAll);
       });
       return program.pipe(Effect.catch(() => Effect.void));
     },

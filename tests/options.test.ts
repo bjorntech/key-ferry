@@ -42,6 +42,23 @@ describe("plugin options", () => {
     ).toBe("relative/project");
   });
 
+  test("project configuration is an explicit, disabled-by-default option", () => {
+    expect(parseOptions({}).projectConfig).toEqual({
+      enabled: false,
+      activation: "auto",
+      file: ".opencode/key-ferry.jsonc",
+    });
+    expect(
+      parseOptions({ projectConfig: { enabled: true, activation: "manual", file: "config.jsonc" } })
+        .projectConfig,
+    ).toEqual({
+      enabled: true,
+      activation: "manual",
+      file: "config.jsonc",
+    });
+    expect(() => parseOptions({ projectConfig: { file: "/etc/key-ferry.jsonc" } })).toThrow();
+  });
+
   test("rejects unbounded or malformed configuration", () => {
     expect(() => parseOptions({ refreshTimeoutMs: 900_001 })).toThrow();
     expect(() => parseOptions({ servers: null })).toThrow("servers must be an object");

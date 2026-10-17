@@ -12,6 +12,15 @@ export type ProjectDirectory = string & { readonly __projectDirectory: unique sy
 
 export type ManagerPhase = "stopped" | "starting" | "ready" | "degraded" | "failed" | "stopping";
 
+/** The two supported Key Ferry lifecycle scopes. */
+export type ScopeId = "global" | "project";
+
+/** Optional scope routing for public RPC operations. */
+export interface ScopeSelector {
+  readonly scope?: ScopeId;
+  readonly server?: string;
+}
+
 export type VarlockErrorCode =
   | "invalid_config"
   | "unavailable"
@@ -48,6 +57,23 @@ export interface SafeStatus {
   readonly lastRefreshAt?: string;
   readonly error?: VarlockError;
   readonly diagnostics?: readonly SafeDiagnostic[];
+  /** Present when the controller is serving more than the legacy global scope. */
+  readonly scopes?: readonly SafeScopeStatus[];
+  /** Server-to-scope bindings, never server configuration or credentials. */
+  readonly bindings?: Readonly<Record<string, ScopeId>>;
+}
+
+/** Secret-free status for one scope in an aggregate status response. */
+export interface SafeScopeStatus {
+  readonly scope: ScopeId;
+  readonly projectDirectory: ProjectDirectory;
+  readonly phase: ManagerPhase;
+  readonly generation: number;
+  readonly pid?: number;
+  readonly lastRefreshAt?: string;
+  readonly error?: VarlockError;
+  readonly diagnostics?: readonly SafeDiagnostic[];
+  readonly activation?: "auto" | "manual" | "awaiting_activation";
 }
 
 /** Secret-free configuration diagnostics surfaced to RPC/TUI consumers. */
