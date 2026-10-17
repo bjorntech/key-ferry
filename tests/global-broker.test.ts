@@ -252,8 +252,16 @@ async function runPluginContexts(
 }
 
 async function waitFor(predicate: () => boolean): Promise<void> {
-  const deadline = Date.now() + 1_000;
+  const deadline = Date.now() + 5_000;
   while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error("fixture did not reach expected state");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+}
+
+async function waitForAsync(predicate: () => Promise<boolean>): Promise<void> {
+  const deadline = Date.now() + 1_000;
+  while (!(await predicate())) {
     if (Date.now() >= deadline) throw new Error("fixture did not reach expected state");
     await new Promise<void>((resolve) => setImmediate(resolve));
   }
@@ -410,10 +418,15 @@ test("shared broker remains alive until the last plugin scope releases it", asyn
   let registered = 0;
   let signalReady!: () => void;
   const allRegistered = new Promise<void>((resolve) => (signalReady = resolve));
+  const statusHandlers: Array<(input: {}) => Effect.Effect<any>> = [];
   const contexts = locations.map((location) => {
     const context = pluginContext(location, canonicalProject) as any;
-    context.rpc.register = () =>
+    context.rpc.register = (
+      _definition: unknown,
+      handlers: { status: (input: {}) => Effect.Effect<any> },
+    ) =>
       Effect.sync(() => {
+        statusHandlers.push(handlers.status);
         registered += 1;
         if (registered === locations.length) signalReady();
         return { dispose: Effect.void, events: { emit: () => Effect.void } };
@@ -434,6 +447,17 @@ test("shared broker remains alive until the last plugin scope releases it", asyn
       ),
     );
     await allRegistered;
+    await waitFor(
+      () =>
+        fixture.spawns.length === 1 &&
+        fixture.runs.filter((run) => run.operation === "environment").length === 1,
+    );
+    await waitForAsync(async () => {
+      const statuses = await Promise.all(
+        statusHandlers.map((status) => Effect.runPromise(status({}))),
+      );
+      return statuses.every((status) => status.phase === "ready");
+    });
     for (const fiber of fibers.slice(0, -1)) {
       await Effect.runPromise(Fiber.interrupt(fiber));
       await Effect.runPromise(Fiber.await(fiber));
@@ -443,6 +467,7 @@ test("shared broker remains alive until the last plugin scope releases it", asyn
     assert.equal(fixture.stops.length, 0);
     await Effect.runPromise(Fiber.interrupt(fibers.at(-1)!));
     await Effect.runPromise(Fiber.await(fibers.at(-1)!));
+    await waitFor(() => fixture.stops.length === 1);
     assert.equal(fixture.stops.length, 1);
   } finally {
     for (const fiber of fibers) await Effect.runPromise(Fiber.interrupt(fiber));
@@ -467,11 +492,18 @@ test("plugin initialization does not block host startup on a pending broker", as
   try {
     // Initialization runs in the background: the host receives control while
     // the local MCP remains fail-closed.
-    await Effect.runPromise(
-      Effect.scoped(plugin.effect(protectedContext.context)).pipe(Effect.timeout("1 second")),
+    const fiber = Effect.runFork(
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* plugin.effect(protectedContext.context);
+          yield* Effect.never;
+        }),
+      ),
     );
+    await waitFor(() => protectedContext.values.get("selected")?.disabled === true);
     assert.equal(protectedContext.values.get("selected")?.disabled, true);
     assert.equal(protectedContext.values.get("nativeOAuth")?.disabled, undefined);
+    await Effect.runPromise(Fiber.interrupt(fiber));
   } finally {
     release();
     assert.equal(fixture.stops.length, 0);

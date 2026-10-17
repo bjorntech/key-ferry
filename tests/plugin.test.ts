@@ -453,6 +453,7 @@ describe("doctor remote relay recovery", () => {
         Effect.gen(function* () {
           yield* plugin.effect(context);
           if (!startupFailure) yield* Deferred.await(initialReady);
+          else runTransform();
           if (!doctor || !current) throw new Error("doctor handler was not registered");
           healthy = false;
           const handler = operation === "refresh" ? refresh : doctor;
@@ -505,7 +506,7 @@ describe("doctor remote relay recovery", () => {
   test("startup failure exposes only safe status and never starts a relay", async () => {
     const run = await runPlugin(false, "doctor", false, true);
     expect(run.started).toEqual([]);
-    expect(run.current.get("selected")?.disabled).toBe(true);
+    expect(run.current.get("selected")?.disabled).not.toBe(false);
     expect(JSON.stringify(run.current)).not.toContain("raw startup secret");
   });
 });

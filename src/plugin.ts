@@ -1,5 +1,5 @@
 import { Mcp, Plugin } from "@opencode/plugin/effect";
-import { Effect, Types } from "effect";
+import { Deferred, Effect, Types } from "effect";
 import { brokerRegistry, type BrokerRegistry } from "./broker-registry.js";
 import type {
   ProjectKeyFerryManagerFactory,
@@ -199,11 +199,49 @@ export function makePlugin(
       if (!parsed.enabled) return Effect.void;
       const program = Effect.gen(function* () {
         const pluginScope = yield* Effect.scope;
+        const controllerReady = yield* Deferred.make<void>();
         const configuration = yield* Effect.promise(() =>
           loadScopedConfiguration(ctx.options, { project: ctx.location.project }),
         );
         let controller: ReturnType<typeof makeScopedController> | undefined;
+        let callbackObserved = false;
+        let rpcRegistered = false;
+        let bootstrapping = true;
+        const registerRpc = (activeController: ReturnType<typeof makeScopedController>) =>
+          ctx.rpc.register(KeyFerryRpc, {
+            status: (input) =>
+              activeController.statusSelected(input).pipe(
+                Effect.map((status) =>
+                  bootstrapping && status.phase === "stopped"
+                    ? { ...status, phase: "starting" as const }
+                    : status,
+                ),
+                Effect.map(sanitizeStatus),
+              ),
+            refresh: (input, context) =>
+              activeController.operation("refresh", input).pipe(
+                Effect.map(sanitizeStatus),
+                Effect.catch((error) =>
+                  Effect.fail(context.error("unavailable", publicMessage(error), rpcError(error))),
+                ),
+              ),
+            doctor: (input, context) =>
+              activeController.operation("doctor", input).pipe(
+                Effect.map(sanitizeStatus),
+                Effect.catch((error) =>
+                  Effect.fail(context.error("unavailable", publicMessage(error), rpcError(error))),
+                ),
+              ),
+            activateProject: (_, context) =>
+              activeController.activateProject.pipe(
+                Effect.map(sanitizeStatus),
+                Effect.catch((error) =>
+                  Effect.fail(context.error("unavailable", publicMessage(error), rpcError(error))),
+                ),
+              ),
+          });
         yield* ctx.mcp.transform((next) => {
+          callbackObserved = true;
           if (controller) {
             controller.setEditor(next);
             controller.apply(next);
@@ -220,42 +258,34 @@ export function makePlugin(
             });
             controller.capture(next);
             controller.apply(next);
+            Deferred.doneUnsafe(controllerReady, Effect.succeed(undefined));
           }
         });
-        if (!controller) return;
-        const activeController = controller;
-        yield* Effect.addFinalizer(() => activeController.dispose);
-        yield* activeController.start;
-        if (parsed.projectConfig.enabled)
-          yield* activeController.watch(() =>
-            loadScopedConfiguration(ctx.options, { project: ctx.location.project }),
-          );
-        yield* ctx.mcp.reload();
-        yield* ctx.rpc.register(KeyFerryRpc, {
-          status: (input) =>
-            activeController.statusSelected(input).pipe(Effect.map(sanitizeStatus)),
-          refresh: (input, context) =>
-            activeController.operation("refresh", input).pipe(
-              Effect.map(sanitizeStatus),
-              Effect.catch((error) =>
-                Effect.fail(context.error("unavailable", publicMessage(error), rpcError(error))),
-              ),
-            ),
-          doctor: (input, context) =>
-            activeController.operation("doctor", input).pipe(
-              Effect.map(sanitizeStatus),
-              Effect.catch((error) =>
-                Effect.fail(context.error("unavailable", publicMessage(error), rpcError(error))),
-              ),
-            ),
-          activateProject: (_, context) =>
-            activeController.activateProject.pipe(
-              Effect.map(sanitizeStatus),
-              Effect.catch((error) =>
-                Effect.fail(context.error("unavailable", publicMessage(error), rpcError(error))),
-              ),
-            ),
-        });
+        yield* Effect.addFinalizer(() => (controller ? controller.dispose : Effect.void));
+        if (callbackObserved && controller && !rpcRegistered) {
+          yield* registerRpc(controller);
+          rpcRegistered = true;
+        }
+        yield* Effect.forkIn(
+          Effect.gen(function* () {
+            yield* Deferred.await(controllerReady);
+            const activeController = controller;
+            if (!activeController) return;
+            yield* activeController.start.pipe(Effect.catch(() => Effect.void));
+            bootstrapping = false;
+            if (parsed.projectConfig.enabled)
+              yield* activeController.watch(() =>
+                loadScopedConfiguration(ctx.options, { project: ctx.location.project }),
+              );
+            yield* ctx.mcp.reload();
+            if (!rpcRegistered) {
+              yield* registerRpc(activeController);
+              rpcRegistered = true;
+            }
+          }).pipe(Effect.catch(() => Effect.void)),
+          pluginScope,
+        );
+        // Native hosts defer RPC registration until the callback-owned child starts.
       });
       return program.pipe(Effect.catch(() => Effect.void));
     },

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.10 — 2026-10-17
+
+### Fixed
+
+- Fixed native MCP transform deferred-initial replay with scoped bootstrap so
+  controller startup and RPC registration cannot be skipped.
+
 ## 0.1.9 — 2026-10-17
 
 ### Added
