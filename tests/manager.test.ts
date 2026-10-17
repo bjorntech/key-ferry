@@ -212,11 +212,22 @@ async function inManagerWithLayer<A>(
 
 async function runRealPlugin(fake: Fake, operation: "startup" | "refresh") {
   let handlers: any;
-  let observedStatus: any;
+  let initialStatus: any;
+  let readyStatus: any;
+  let resolveReady!: () => void;
+  let readySeen = false;
+  const ready = new Promise<void>((resolve) => (resolveReady = resolve));
   const editor = {
     list: () => [],
     get: () => undefined,
     update: () => undefined,
+  };
+  const observeReady = (status: any) => {
+    if (!readySeen && status?.phase === "ready") {
+      readySeen = true;
+      readyStatus = status;
+      resolveReady();
+    }
   };
   const plugin = makePlugin({ layer: () => layer(fake) });
   const context = {
@@ -224,16 +235,15 @@ async function runRealPlugin(fake: Fake, operation: "startup" | "refresh") {
     location: { project: { directory: fixtureProject } },
     mcp: {
       transform: (callback: (value: typeof editor) => void) => Effect.sync(() => callback(editor)),
-      reload: () => Effect.void,
+      reload: () =>
+        Effect.gen(function* () {
+          if (handlers) observeReady(yield* handlers.status({}));
+        }),
     },
     rpc: {
       register: (_definition: unknown, value: unknown) =>
         Effect.gen(function* () {
           handlers = value as any;
-          if (operation === "refresh") {
-            yield* handlers.refresh({}, { error: () => new Error("safe") });
-          }
-          observedStatus = yield* handlers.status({});
           return { dispose: Effect.void, events: { emit: () => Effect.void } };
         }),
     },
@@ -241,7 +251,16 @@ async function runRealPlugin(fake: Fake, operation: "startup" | "refresh") {
   const program = Effect.scoped(
     Effect.gen(function* () {
       yield* plugin.effect(context);
-      return observedStatus;
+      initialStatus = yield* handlers.status({});
+      observeReady(initialStatus);
+      yield* Effect.promise(() => ready);
+      const status = yield* handlers.status({});
+      observeReady(status);
+      if (operation === "refresh") {
+        const refreshed = yield* handlers.refresh({}, { error: () => new Error("safe") });
+        return { initialStatus, readyStatus: status, refreshedStatus: refreshed };
+      }
+      return { initialStatus, readyStatus: status };
     }),
   ).pipe(
     Effect.timeoutOrElse({
@@ -306,16 +325,21 @@ test("concurrent atomic startup calls share one owned process", async () => {
 
 test("real plugin startup uses the manager's atomic lifecycle operation", async () => {
   const fake = fakeProcess();
-  const status = await runRealPlugin(fake, "startup");
-  assert.equal(status.phase, "ready");
+  const result = await runRealPlugin(fake, "startup");
+  assert.equal(result.initialStatus.phase, "starting");
+  assert.equal(result.readyStatus.phase, "ready");
+  assert.equal(result.readyStatus.generation, 0);
   assert.equal(fake.starts.length, 1);
 });
 
 test("real plugin refresh uses one permit and keeps status/environment coherent", async () => {
   const fake = fakeProcess();
-  const status = await runRealPlugin(fake, "refresh");
-  assert.equal(status.phase, "ready");
-  assert.equal(status.generation, 1);
+  const result = await runRealPlugin(fake, "refresh");
+  assert.equal(result.initialStatus.phase, "starting");
+  assert.equal(result.readyStatus.phase, "ready");
+  assert.equal(result.readyStatus.generation, 0);
+  assert.equal(result.refreshedStatus.phase, "ready");
+  assert.equal(result.refreshedStatus.generation, 1);
   assert.equal(fake.starts.length, 1);
   assert.equal(fake.runs.filter((run) => run.includes("reload")).length, 1);
 });

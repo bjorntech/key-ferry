@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
   "name": "@bjorntech/key-ferry",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Project-scoped Key Ferry integration for OpenCode V2",
   "keywords": [],
   "homepage": "https://github.com/bjorntech/key-ferry#readme",

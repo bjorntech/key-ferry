@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import type { Mcp } from "@opencode/plugin/effect";
-import { Effect } from "effect";
+import { Deferred, Effect } from "effect";
 import { Layer } from "effect";
+import { makeBrokerRegistry } from "../src/broker-registry.js";
 import {
   ProjectKeyFerryManager,
   projectDirectory,
@@ -328,6 +329,7 @@ describe("doctor remote relay recovery", () => {
       | ((input: {}, context: { error: (code: string, data: unknown) => unknown }) => unknown)
       | undefined;
     let refresh: typeof doctor | undefined;
+    const initialReady = await Effect.runPromise(Deferred.make<void>());
     const manager = {
       status: Effect.sync(() =>
         startupFailure
@@ -407,7 +409,11 @@ describe("doctor remote relay recovery", () => {
     const factory: ProjectKeyFerryManagerFactory = {
       layer: () => Layer.succeed(ProjectKeyFerryManager, manager),
     };
-    const plugin = makePlugin(factory, relayFactory as never);
+    const plugin = makePlugin(
+      factory,
+      relayFactory as never,
+      makeBrokerRegistry({ canonicalize: (directory) => Effect.succeed(directory) }),
+    );
     const context = {
       options: {
         servers: {
@@ -422,7 +428,12 @@ describe("doctor remote relay recovery", () => {
             transform = callback;
             runTransform();
           }),
-        reload: () => Effect.sync(runTransform),
+        reload: () =>
+          Effect.gen(function* () {
+            runTransform();
+            if (current?.get("selected")?.disabled === false)
+              yield* Deferred.succeed(initialReady, undefined);
+          }),
       },
       rpc: {
         register: (
@@ -441,6 +452,7 @@ describe("doctor remote relay recovery", () => {
       Effect.scoped(
         Effect.gen(function* () {
           yield* plugin.effect(context);
+          if (!startupFailure) yield* Deferred.await(initialReady);
           if (!doctor || !current) throw new Error("doctor handler was not registered");
           healthy = false;
           const handler = operation === "refresh" ? refresh : doctor;

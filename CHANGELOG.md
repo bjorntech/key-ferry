@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.1.8 — 2026-10-17
+
+This patch release shares compatible Varlock broker state across configured
+contexts while keeping MCP mappings and relay handles scoped to each plugin
+location.
+
+### Fixed
+
+- Shared one owned broker for contexts with the same canonical Varlock root,
+  effective options, and factory within the importing process.
+- Kept plugin initialization fast by registering status and control handlers
+  before background startup; protected MCP servers remain disabled until the
+  broker is ready.
+- Cached failed startup state and made explicit Refresh or Doctor operations
+  retry through one shared attempt, without automatic retries from new
+  locations or status checks.
+- Gated all consumers on shared refresh completion and cleaned up owned
+  resources when the last scoped lease is released, without blocking unrelated
+  broker keys.
+
 ## 0.1.7 — 2026-10-17
 
 This patch release hardens process ownership and Varlock lifecycle
