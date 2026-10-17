@@ -116,18 +116,24 @@ describe("scoped controller broker event recovery contract", () => {
     const counters = { acquire: 0, refresh: 0, retry: 0 };
     const fake = fakeBroker(root, counters);
     const scope = Effect.runSync(Scope.make());
+    const pristine = structuredClone(Object.fromEntries(editor.values));
+    let controller: ReturnType<typeof makeScopedController>;
     const factory: ProjectKeyFerryManagerFactory = {
       layer: () => {
         throw new Error("the controlled broker supplies the lease; factory must not be used");
       },
     };
-    const controller = makeScopedController({
+    controller = makeScopedController({
       configuration,
       factory,
       registry: fake.registry,
       scope,
-      reload: () => Effect.void,
-      editor: editor.editor,
+      reload: () =>
+        Effect.sync(() => {
+          for (const [name, value] of Object.entries(pristine))
+            editor.values.set(name, structuredClone(value));
+          controller.apply(editor.editor);
+        }),
       startEmptyGlobal: true,
     });
     controller.capture(editor.editor);

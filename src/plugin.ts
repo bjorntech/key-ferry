@@ -243,7 +243,6 @@ export function makePlugin(
         yield* ctx.mcp.transform((next) => {
           callbackObserved = true;
           if (controller) {
-            controller.setEditor(next);
             controller.apply(next);
           } else {
             controller = makeScopedController({
@@ -253,10 +252,8 @@ export function makePlugin(
               registry,
               scope: pluginScope,
               reload: ctx.mcp.reload,
-              editor: next,
               startEmptyGlobal: !parsed.projectConfig.enabled,
             });
-            controller.capture(next);
             controller.apply(next);
             Deferred.doneUnsafe(controllerReady, Effect.succeed(undefined));
           }

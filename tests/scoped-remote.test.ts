@@ -96,7 +96,9 @@ const scopeContext = (
   servers: Record<string, any>,
 ): Scope => {
   const values = new Map(Object.entries(servers));
+  const pristine = structuredClone(Object.fromEntries(values));
   const handlers: { current?: Record<string, any> } = {};
+  let transform: ((value: typeof editor) => void) | undefined;
   const editor = {
     list: () => [...values.entries()],
     get: (name: string) => values.get(name),
@@ -109,8 +111,17 @@ const scopeContext = (
     options,
     location: { project: { directory: location } },
     mcp: {
-      transform: (callback: (value: typeof editor) => void) => Effect.sync(() => callback(editor)),
-      reload: () => Effect.void,
+      transform: (callback: (value: typeof editor) => void) =>
+        Effect.sync(() => {
+          transform = callback;
+          callback(editor);
+        }),
+      reload: () =>
+        Effect.sync(() => {
+          for (const [name, value] of Object.entries(pristine))
+            values.set(name, structuredClone(value));
+          transform?.(editor);
+        }),
     },
     rpc: {
       register: (_definition: unknown, value: unknown) =>

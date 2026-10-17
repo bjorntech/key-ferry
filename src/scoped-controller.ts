@@ -48,48 +48,6 @@ function inactiveNames(names: Set<string>, next: ScopedConfiguration): Set<strin
   return new Set([...names].filter((name) => next.bindings[name] === undefined));
 }
 
-function restoreRuntimeEnvironment(config: any, state: ManagedEnvironmentState): void {
-  if (config.type !== "local") return;
-  const environment = { ...(config.environment ?? {}) };
-  for (const key of Object.keys(state.injected)) restoreRuntimeKey(environment, state, key);
-  config.environment = environment;
-}
-
-function restoreRuntimeKey(
-  environment: Record<string, string>,
-  state: ManagedEnvironmentState,
-  key: string,
-): void {
-  if (environment[key] !== state.injected[key]) return;
-  if (state.original[key] === undefined) delete environment[key];
-  else environment[key] = state.original[key]!;
-}
-
-function removeInjectedEnvironment(
-  config: any,
-  entries: Map<string, ManagedEnvironmentState>,
-): void {
-  if (config.type !== "local") return;
-  const environment = { ...(config.environment ?? {}) };
-  for (const state of entries.values()) removeInjectedEntries(environment, state);
-  config.environment = environment;
-}
-
-function removeInjectedEntries(
-  environment: Record<string, string>,
-  state: ManagedEnvironmentState,
-): void {
-  for (const key of Object.keys(state.injected)) removeInjectedKey(environment, state, key);
-}
-
-function removeInjectedKey(
-  environment: Record<string, string>,
-  state: ManagedEnvironmentState,
-  key: string,
-): void {
-  if (environment[key] === state.injected[key]) delete environment[key];
-}
-
 function runtimeIsCurrent(
   runtime: Runtime,
   runtimes: Map<ScopeId, Runtime>,
@@ -105,7 +63,6 @@ export interface ScopedControllerOptions {
   readonly registry: BrokerRegistry;
   readonly scope: Scope.Scope;
   readonly reload: () => Effect.Effect<void>;
-  readonly editor: McpEditor;
   readonly watchIntervalMs?: number;
   readonly startEmptyGlobal?: boolean;
 }
@@ -114,7 +71,6 @@ export interface ScopedControllerOptions {
 export function makeScopedController(options: ScopedControllerOptions) {
   const runtimes = new Map<ScopeId, Runtime>();
   let configuration = options.configuration;
-  let editor = options.editor;
   const pristine = new Map<string, RemoteServerSnapshot>();
   const pristineEnvironment = new Map<string, Readonly<Record<string, string>>>();
   const managedEnvironment = new Map<string, Map<string, ManagedEnvironmentState>>();
@@ -138,23 +94,14 @@ export function makeScopedController(options: ScopedControllerOptions) {
   const rememberManagedEnvironment = (nextEditor: McpEditor, runtime: Runtime) =>
     runtimeEnvironment(nextEditor, runtime, pristineEnvironment, managedEnvironment, lastInjected);
 
-  const removeManagedForRuntime = (editor: McpEditor, runtime: Runtime) => {
-    for (const [name, entries] of managedEnvironment) {
-      const state = entries.get(runtime.id);
-      if (!state) continue;
-      editor.update(name, (config) => restoreRuntimeEnvironment(config, state));
-      entries.delete(runtime.id);
-    }
-  };
-
-  const removeUnboundManaged = (editor: McpEditor) => {
+  const removeUnboundManaged = () => {
     const bound = new Set(
       [...runtimes.values()].flatMap((runtime) => Object.keys(runtime.mappings)),
     );
     for (const [name, entries] of managedEnvironment) {
       if (bound.has(name)) continue;
-      editor.update(name, (config) => removeInjectedEnvironment(config, entries));
       managedEnvironment.delete(name);
+      lastInjected.delete(name);
     }
   };
 
@@ -164,9 +111,12 @@ export function makeScopedController(options: ScopedControllerOptions) {
     return projectFallback(configuration);
   };
 
+  // Called only from the active mcp.transform callback. The editor is a draft
+  // owned by that callback and is never retained by the controller.
   const apply = (editor: McpEditor) => {
     capture(editor);
     cleanupManagedEnvironment(editor);
+    removeUnboundManaged();
     for (const runtime of runtimes.values()) {
       applyRuntimeProtection(editor, runtime, explicitlyDisabled);
       rememberManagedEnvironment(editor, runtime);
@@ -203,7 +153,6 @@ export function makeScopedController(options: ScopedControllerOptions) {
       error: safeFailure(error, code),
     };
     runtime.state = emptyProtectionState();
-    apply(editor);
   };
 
   const clear = (runtime: Runtime, phase: "starting" | "failed" = "starting") =>
@@ -219,7 +168,6 @@ export function makeScopedController(options: ScopedControllerOptions) {
       };
       runtime.state = emptyProtectionState();
       yield* runtime.remote.stopAll;
-      apply(editor);
       yield* options.reload();
     });
 
@@ -269,7 +217,6 @@ export function makeScopedController(options: ScopedControllerOptions) {
         explicitlyDisabled,
       };
       runtime.observedGeneration = status.generation;
-      apply(editor);
       yield* options.reload();
     });
 
@@ -433,8 +380,9 @@ export function makeScopedController(options: ScopedControllerOptions) {
       Effect.map((value) => value as BrokerLease),
       Effect.catch((error: unknown) =>
         kind === "doctor"
-          ? Effect.sync(() => {
+          ? Effect.gen(function* () {
               rememberFailure(runtime, error, "unavailable");
+              yield* options.reload();
             }).pipe(Effect.as(undefined))
           : Effect.fail(error),
       ),
@@ -444,8 +392,9 @@ export function makeScopedController(options: ScopedControllerOptions) {
     kind === "doctor"
       ? lease.ensureReady.pipe(
           Effect.catch((error: unknown) =>
-            Effect.sync(() => {
+            Effect.gen(function* () {
               rememberFailure(runtime, error);
+              yield* options.reload();
             }),
           ),
         )
@@ -575,8 +524,6 @@ export function makeScopedController(options: ScopedControllerOptions) {
       runtime.state = emptyProtectionState();
       runtimes.delete("project");
       inactiveProjectNames = previousNames;
-      removeManagedForRuntime(editor, runtime);
-      apply(editor);
       yield* options.reload();
       yield* runtime.remote.stopAll;
       if (runtime.lease) yield* runtime.lease.release;
@@ -589,8 +536,6 @@ export function makeScopedController(options: ScopedControllerOptions) {
       global.transitioning = true;
       global.mappings = filterGroupMappings(global.group, next.bindings);
     }
-    cleanupManagedEnvironment(editor);
-    removeUnboundManaged(editor);
     return global;
   };
 
@@ -603,7 +548,6 @@ export function makeScopedController(options: ScopedControllerOptions) {
       inactiveProjectNames = inactiveNames(previousNames, next);
       const global = updateProjectConfiguration(next);
       if (next.project && next.activation === "auto") yield* acquire(next.project);
-      apply(editor);
       yield* options.reload();
       if (global) global.transitioning = false;
     });
@@ -636,7 +580,6 @@ export function makeScopedController(options: ScopedControllerOptions) {
           projectDirectory: runtime.group.sourceRoot,
           generation: runtime.status?.generation ?? 0,
         };
-        apply(editor);
         return runtime.remote.stopAll.pipe(
           Effect.andThen(runtime.lease ? runtime.lease.release : Effect.void),
           Effect.andThen(Scope.close(runtime.scope, Exit.void)),
@@ -646,15 +589,10 @@ export function makeScopedController(options: ScopedControllerOptions) {
     ).pipe(Effect.asVoid),
   );
 
-  const setEditor = (next: McpEditor) => {
-    editor = next;
-  };
-
   return {
     start,
     capture,
     apply,
-    setEditor,
     status,
     statusSelected,
     operation,

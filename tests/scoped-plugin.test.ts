@@ -101,6 +101,7 @@ function scopeContext(
   const values = new Map(Object.entries(servers));
   const reloads = { count: 0 };
   const handlers: { current?: Record<string, any> } = {};
+  let transform: ((value: typeof editor) => void) | undefined;
   const editor = {
     list: () => [...values.entries()],
     get: (name: string) => values.get(name),
@@ -113,8 +114,16 @@ function scopeContext(
     options,
     location: { project: { directory: location } },
     mcp: {
-      transform: (callback: (value: typeof editor) => void) => Effect.sync(() => callback(editor)),
-      reload: () => Effect.sync(() => void reloads.count++),
+      transform: (callback: (value: typeof editor) => void) =>
+        Effect.sync(() => {
+          transform = callback;
+          callback(editor);
+        }),
+      reload: () =>
+        Effect.sync(() => {
+          reloads.count++;
+          transform?.(editor);
+        }),
     },
     rpc: {
       register: (_definition: unknown, value: unknown) =>

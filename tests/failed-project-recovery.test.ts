@@ -129,6 +129,8 @@ async function makeFixture(): Promise<ScopeFixture> {
   ]);
   const reloads = { count: 0 };
   const handlers: { current?: Record<string, any> } = {};
+  const pristine = structuredClone(Object.fromEntries(values));
+  let transform: ((value: typeof editor) => void) | undefined;
   const editor = {
     list: () => [...values.entries()],
     get: (name: string) => values.get(name),
@@ -146,8 +148,18 @@ async function makeFixture(): Promise<ScopeFixture> {
     },
     location: { project: { directory: projectRoot } },
     mcp: {
-      transform: (callback: (value: typeof editor) => void) => Effect.sync(() => callback(editor)),
-      reload: () => Effect.sync(() => void reloads.count++),
+      transform: (callback: (value: typeof editor) => void) =>
+        Effect.sync(() => {
+          transform = callback;
+          callback(editor);
+        }),
+      reload: () =>
+        Effect.sync(() => {
+          reloads.count++;
+          for (const [name, value] of Object.entries(pristine))
+            values.set(name, structuredClone(value));
+          transform?.(editor);
+        }),
     },
     rpc: {
       register: (_definition: unknown, handlersValue: unknown) =>

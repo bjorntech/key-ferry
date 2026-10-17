@@ -107,13 +107,18 @@ function runController(
   reload: () => Effect.Effect<void> = () => Effect.void,
 ) {
   const scope = Effect.runSync(Scope.make());
-  const controller = makeScopedController({
+  let controller: ReturnType<typeof makeScopedController>;
+  const nativeReload = reload;
+  controller = makeScopedController({
     configuration: config,
     factory,
     registry: makeBrokerRegistry({ canonicalize: (path) => Effect.succeed(path) }),
     scope,
-    reload,
-    editor: editor.editor,
+    reload: () =>
+      Effect.gen(function* () {
+        yield* nativeReload();
+        controller.apply(editor.editor);
+      }),
   });
   controller.capture(editor.editor);
   controller.apply(editor.editor);

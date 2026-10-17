@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.12 — 2026-10-17
+
+### Fixed
+
+- Reconcile fresh native MCP drafts when asynchronous readiness or recovery
+  requires a replay, preserving native configuration and environment values.
+
 ## 0.1.11 — 2026-10-17
 
 ### Fixed
