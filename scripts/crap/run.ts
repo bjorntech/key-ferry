@@ -80,6 +80,10 @@ async function main(): Promise<void> {
     await cp(join(root, "src"), join(temp, "src"), { recursive: true });
     await cp(join(root, "tests"), join(temp, "tests"), { recursive: true });
     await cp(join(root, "scripts"), join(temp, "scripts"), { recursive: true });
+    // The isolated mirror must contain the declared baseline dataset as well
+    // as code. Do not fall back to the caller's working tree or an empty
+    // baseline: the mirror is deliberately independent of repository layout.
+    await cp(join(root, "quality"), join(temp, "quality"), { recursive: true });
     // Bun resolves the repository's existing runtime dependencies through this isolated mirror.
     await cp(join(root, "node_modules"), join(temp, "node_modules"), { recursive: true });
     const instrumenter = createInstrumenter({
@@ -129,7 +133,7 @@ async function main(): Promise<void> {
       // handled as an error below rather than silently becoming zero coverage.
       const entry = coverage[key] ?? coverage[file] ?? { statementMap: {}, s: {} };
       if (!entry || typeof entry !== "object") throw new Error(`malformed coverage for ${key}`);
-      metrics.push(...analyzeFile(originalPath, await readFile(originalPath, "utf8"), entry));
+      metrics.push(...analyzeFile(key, await readFile(originalPath, "utf8"), entry, root));
     }
     const baselinePath = join(root, "quality/crap-baseline.json");
     const baselineText = await readFile(baselinePath, "utf8");
@@ -137,10 +141,9 @@ async function main(): Promise<void> {
     const baseline = parseJson<{ entries: BaselineEntry[] }>(baselineText, "baseline");
     assertUniqueBaseline(baseline.entries);
     const results: QualityResult[] = metrics.map((metric) => {
-      const relativeFile = metric.file.replace(`${root}/`, "");
       const matching = baseline.entries.find(
         (entry) =>
-          entry.file === relativeFile &&
+          entry.file === metric.file &&
           entry.identity === metric.identity &&
           entry.fingerprint === metric.fingerprint,
       );

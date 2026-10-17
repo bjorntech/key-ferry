@@ -202,103 +202,60 @@ function normalizeRemoteServer(
   return { remote: { headers: result } };
 }
 
-/**
- * Decode untrusted OpenCode plugin options without touching process.env.
- * `enabled: false` explicitly means no manager layer, MCP transform, or RPC
- * is installed and existing MCP configuration is left untouched.
- */
-export function parseOptions(
-  raw: unknown,
-  directory?: string,
-  resolveProjectDirectory = true,
-): ValidatedOptions {
-  const input = isRecord(raw) ? raw : {};
-  if ("failClosed" in input)
-    throw new TypeError("failClosed is not supported; protection is always fail-closed");
-  const enabled =
-    input.enabled === undefined
-      ? true
-      : typeof input.enabled === "boolean"
-        ? input.enabled
-        : (() => {
-            throw new TypeError("enabled must be a boolean");
-          })();
-  const resolvedProjectDirectory =
-    input.projectDirectory === undefined
-      ? directory === undefined
-        ? undefined
-        : brandProjectDirectory(directory)
-      : (() => {
-          if (
-            typeof input.projectDirectory !== "string" ||
-            input.projectDirectory.trim().length === 0
-          ) {
-            throw new TypeError("projectDirectory must be a non-empty path");
-          }
-          return brandProjectDirectory(
-            resolveProjectDirectory
-              ? resolve(directory ?? process.cwd(), input.projectDirectory)
-              : input.projectDirectory,
-          );
-        })();
+function readBoolean(input: Record<string, unknown>, name: string, fallback: boolean): boolean {
+  const value = input[name];
+  if (value === undefined) return fallback;
+  if (typeof value !== "boolean") throw new TypeError(`${name} must be a boolean`);
+  return value;
+}
 
-  const command = input.command === undefined ? ["varlock"] : stringArray(input.command, "command");
-  const startupTimeoutMs =
-    input.startupTimeoutMs === undefined
-      ? DEFAULT_STARTUP_TIMEOUT_MS
-      : positiveInteger(input.startupTimeoutMs, "startupTimeoutMs");
-  const commandTimeoutMs =
-    input.commandTimeoutMs === undefined
-      ? DEFAULT_COMMAND_TIMEOUT_MS
-      : positiveInteger(input.commandTimeoutMs, "commandTimeoutMs", MAX_TIMEOUT_MS);
-  // Accept the old spelling while emitting only the manager's canonical
-  // reloadTimeoutMs option. This avoids silently turning a refresh timeout
-  // into a startup timeout for existing configurations.
-  const usesLegacyReloadName =
+function readTimeout(
+  input: Record<string, unknown>,
+  name: string,
+  fallback: number,
+  maximum?: number,
+): number {
+  const value = input[name];
+  return value === undefined ? fallback : positiveInteger(value, name, maximum);
+}
+
+function normalizeReloadTimeout(input: Record<string, unknown>): number {
+  const usesLegacyName =
     input.reloadTimeoutMs === undefined && input.refreshTimeoutMs !== undefined;
-  const reloadInput = input.reloadTimeoutMs ?? input.refreshTimeoutMs;
-  const reloadTimeoutMs =
-    reloadInput === undefined
-      ? DEFAULT_RELOAD_TIMEOUT_MS
-      : positiveInteger(
-          reloadInput,
-          "reloadTimeoutMs",
-          usesLegacyReloadName ? 900_000 : MAX_RELOAD_TIMEOUT_MS,
-        );
-  const pollIntervalMs =
-    input.pollIntervalMs === undefined
-      ? DEFAULT_POLL_INTERVAL_MS
-      : positiveInteger(input.pollIntervalMs, "pollIntervalMs", 10_000);
-  const requireStrictEgress =
-    input.requireStrictEgress === undefined
-      ? true
-      : typeof input.requireStrictEgress === "boolean"
-        ? input.requireStrictEgress
-        : (() => {
-            throw new TypeError("requireStrictEgress must be a boolean");
-          })();
-  const allowPrivateNetwork =
-    input.allowPrivateNetwork === undefined
-      ? false
-      : typeof input.allowPrivateNetwork === "boolean"
-        ? input.allowPrivateNetwork
-        : (() => {
-            throw new TypeError("allowPrivateNetwork must be a boolean");
-          })();
+  const value = input.reloadTimeoutMs ?? input.refreshTimeoutMs;
+  return value === undefined
+    ? DEFAULT_RELOAD_TIMEOUT_MS
+    : positiveInteger(value, "reloadTimeoutMs", usesLegacyName ? 900_000 : MAX_RELOAD_TIMEOUT_MS);
+}
 
+function normalizeServers(input: Record<string, unknown>): Record<string, ServerProtection> {
+  const rawServers = input.servers;
+  if (rawServers === undefined) return Object.create(null) as Record<string, ServerProtection>;
+  if (!isRecord(rawServers)) throw new TypeError("servers must be an object");
   const servers: Record<string, ServerProtection> = Object.create(null) as Record<
     string,
     ServerProtection
   >;
-  if (input.servers !== undefined) {
-    if (!isRecord(input.servers)) throw new TypeError("servers must be an object");
-    for (const [name, value] of Object.entries(input.servers)) {
-      if (!name || unsafeName(name))
-        throw new TypeError("server names must be safe non-empty names");
-      servers[name] = normalizeServer(name, value);
-    }
+  for (const [name, value] of Object.entries(rawServers)) {
+    if (!name || unsafeName(name)) throw new TypeError("server names must be safe non-empty names");
+    servers[name] = normalizeServer(name, value);
   }
+  return servers;
+}
 
+function normalizeAdapter(input: Record<string, unknown>): VarlockAdapterOptions {
+  const command = input.command === undefined ? ["varlock"] : stringArray(input.command, "command");
+  const startupTimeoutMs = readTimeout(input, "startupTimeoutMs", DEFAULT_STARTUP_TIMEOUT_MS);
+  const commandTimeoutMs = readTimeout(
+    input,
+    "commandTimeoutMs",
+    DEFAULT_COMMAND_TIMEOUT_MS,
+    MAX_TIMEOUT_MS,
+  );
+  const reloadTimeoutMs = normalizeReloadTimeout(input);
+  const pollIntervalMs = readTimeout(input, "pollIntervalMs", DEFAULT_POLL_INTERVAL_MS, 10_000);
+  const requireStrictEgress = readBoolean(input, "requireStrictEgress", true);
+  const allowPrivateNetwork = readBoolean(input, "allowPrivateNetwork", false);
   const adapter = {
     command,
     startupTimeoutMs,
@@ -307,7 +264,7 @@ export function parseOptions(
     pollIntervalMs,
     requireStrictEgress,
     allowPrivateNetwork,
-    servers,
+    servers: normalizeServers(input),
   } as unknown as VarlockAdapterOptions;
   // Existing consumers read this property directly. It is deliberately not
   // enumerable so managerOptions can pass an exact canonical adapter shape.
@@ -316,21 +273,63 @@ export function parseOptions(
     enumerable: false,
     configurable: false,
   });
+  return adapter;
+}
+
+function validateProjectPath(value: unknown): string {
+  if (typeof value !== "string" || value.trim().length === 0)
+    throw new TypeError("projectDirectory must be a non-empty path");
+  return value;
+}
+
+function resolveProjectDirectory(
+  input: Record<string, unknown>,
+  directory: string | undefined,
+  resolveDirectory: boolean,
+): ProjectDirectory | undefined {
+  if (input.projectDirectory === undefined) {
+    return directory === undefined ? undefined : brandProjectDirectory(directory);
+  }
+  const configured = validateProjectPath(input.projectDirectory);
+  const value = resolveDirectory ? resolve(directory ?? process.cwd(), configured) : configured;
+  return brandProjectDirectory(value);
+}
+
+function makeValidatedOptions(
+  enabled: boolean,
+  projectDirectory: ProjectDirectory | undefined,
+  adapter: VarlockAdapterOptions,
+): ValidatedOptions {
   const manager: ValidatedOptions["manager"] = {
     enabled,
-    ...(resolvedProjectDirectory === undefined
-      ? {}
-      : { projectDirectory: resolvedProjectDirectory }),
+    ...(projectDirectory === undefined ? {} : { projectDirectory }),
     adapter,
   };
   return {
     enabled,
-    ...(resolvedProjectDirectory === undefined
-      ? {}
-      : { projectDirectory: resolvedProjectDirectory }),
+    ...(projectDirectory === undefined ? {} : { projectDirectory }),
     adapter,
     manager,
   };
+}
+
+/**
+ * Decode untrusted OpenCode plugin options without touching process.env.
+ * `enabled: false` explicitly means no manager layer, MCP transform, or RPC
+ * is installed and existing MCP configuration is left untouched.
+ */
+export function parseOptions(
+  raw: unknown,
+  directory?: string,
+  resolveDirectory = true,
+): ValidatedOptions {
+  const input = isRecord(raw) ? raw : {};
+  if ("failClosed" in input)
+    throw new TypeError("failClosed is not supported; protection is always fail-closed");
+  const enabled = readBoolean(input, "enabled", true);
+  const adapter = normalizeAdapter(input);
+  const projectDirectory = resolveProjectDirectory(input, directory, resolveDirectory);
+  return makeValidatedOptions(enabled, projectDirectory, adapter);
 }
 
 export function managerOptions(

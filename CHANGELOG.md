@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.1.7 — 2026-10-17
+
+This patch release hardens process ownership and Varlock lifecycle
+cancellation, and completes the quality-checker baseline migration. It does
+not claim to diagnose or fix repeated 1Password prompts.
+
+### Fixed
+
+- Bound, joined, and idempotently cleaned up owned subprocesses, including
+  eager asynchronous spawn-failure handling and valid PID capture.
+- Preserved startup and refresh interruption ownership, generation/readiness
+  semantics, and safe certificate-directory handling.
+- Made certificate allocation lazy and transactional, including late Promise
+  cancellation scoping.
+- Refactored validator helpers without changing behavior.
+
+### Quality
+
+- Completed AST semantic fingerprints, canonical IDs, historical-baseline
+  ratcheting, and isolated synthetic fixtures for the CRAP checker.
+
 ## 0.1.6 — 2026-10-16
 
 This patch release hardens plugin activation and retains atomic lifecycle

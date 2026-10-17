@@ -46,6 +46,14 @@ type AdapterOptions = {
   requireStrictEgress: boolean;
 };
 
+type ManagerFileOps = {
+  mkdtemp: typeof mkdtemp;
+  realpath: typeof realpath;
+  rm: typeof rm;
+};
+
+const defaultFileOps: ManagerFileOps = { mkdtemp, realpath, rm };
+
 type ManagerState = {
   phase: SafeStatus["phase"];
   generation: number;
@@ -305,7 +313,6 @@ function validateStartupEgress(
   requireStrictEgress: boolean,
   session: VarlockSessionRecord,
   handle: ManagedProcess,
-  clearCapability: (phase: SafeStatus["phase"], error?: VarlockError) => void,
 ): Effect.Effect<void, VarlockError> {
   if (!requireStrictEgress || session.egressMode === "strict") return Effect.void;
   const error = safeError("invalid_config", false);
@@ -314,7 +321,6 @@ function validateStartupEgress(
     Effect.tap(() =>
       Effect.sync(() => {
         state.process = undefined;
-        clearCapability("failed", error);
       }),
     ),
     Effect.flatMap(() => Effect.fail(error)),
@@ -349,6 +355,7 @@ function rejectUnavailableEnvironment(state: ManagerState): Effect.Effect<void, 
 export function makeProjectKeyFerryManager(
   options: ProjectKeyFerryManagerOptions,
   processLayer: Layer.Layer<Process, never, never> = ProcessLive,
+  fileOps: ManagerFileOps = defaultFileOps,
 ): Layer.Layer<ProjectKeyFerryManager, VarlockError, never> {
   return Layer.effect(
     ProjectKeyFerryManager,
@@ -379,14 +386,9 @@ export function makeProjectKeyFerryManager(
           (entry): entry is [string, string] => entry[1] !== undefined,
         ),
       );
-      const certDirectory = yield* Effect.tryPromise({
-        try: () => mkdtemp(join(tmpdir(), "key-ferry-cert-")),
-        catch: () => safeError("start_failed", true),
-      });
-      const certDirectoryReal = yield* Effect.tryPromise({
-        try: () => realpath(certDirectory),
-        catch: () => safeError("start_failed", true),
-      });
+      let certDirectory: string | undefined;
+      let certDirectoryReal: string | undefined;
+      const ownedCertDirectories = new Set<string>();
       const lock = yield* Semaphore.make(1);
       const state: ManagerState = { phase: "stopped", generation: 0, disposed: false };
 
@@ -481,7 +483,7 @@ export function makeProjectKeyFerryManager(
                   assertRegularCertificate(original);
                   const resolved = await realpath(decoded.wiring.caPath);
                   const cert = await stat(resolved);
-                  assertContainedCertificate(certDirectoryReal, resolved);
+                  assertContainedCertificate(certDirectoryReal!, resolved);
                   // Varlock's CA certificate is public trust material and is
                   // currently written 0644. Reject group/other *writes*, but
                   // allow readable public certs. The directory remains
@@ -496,64 +498,127 @@ export function makeProjectKeyFerryManager(
           ),
         );
 
-      const startInternal = (): Effect.Effect<SafeStatus, VarlockError> =>
-        Effect.gen(function* () {
+      const removeOwnedDirectory = (directory: string) =>
+        Effect.tryPromise({
+          try: () => fileOps.rm(directory, { recursive: true, force: true }),
+          catch: () => safeError("start_failed", true),
+        }).pipe(
+          Effect.tap(() => Effect.sync(() => ownedCertDirectories.delete(directory))),
+          Effect.catch(() => Effect.void),
+        );
+
+      const acquireCertDirectory = (onOwned: (directory: string) => void) =>
+        Effect.uninterruptibleMask(() =>
+          Effect.gen(function* () {
+            const directory = yield* Effect.tryPromise({
+              try: () => fileOps.mkdtemp(join(tmpdir(), "key-ferry-cert-")),
+              catch: () => safeError("start_failed", true),
+            });
+            // The promise above cannot be cancelled. Register ownership before
+            // any interruptible work so a late filesystem completion is never
+            // forgotten by the manager's finalizer.
+            ownedCertDirectories.add(directory);
+            onOwned(directory);
+            const canonical = yield* Effect.tryPromise({
+              try: () => fileOps.realpath(directory),
+              catch: () => safeError("start_failed", true),
+            }).pipe(
+              Effect.catch((error) =>
+                removeOwnedDirectory(directory).pipe(Effect.andThen(Effect.fail(error))),
+              ),
+            );
+            return { directory, canonical };
+          }),
+        );
+
+      const interruptedStartCleanup = (handle?: ManagedProcess, directory?: string) =>
+        Effect.uninterruptible(
+          Effect.gen(function* () {
+            if (handle) yield* handle.stop.pipe(Effect.catch(() => Effect.void));
+            state.process = undefined;
+            state.session = undefined;
+            state.environment = undefined;
+            clearCapability("failed", safeError("timeout", true));
+            if (directory) {
+              if (certDirectory === directory) {
+                certDirectory = undefined;
+                certDirectoryReal = undefined;
+              }
+              yield* removeOwnedDirectory(directory);
+            }
+          }),
+        );
+
+      const startInternal = (): Effect.Effect<SafeStatus, VarlockError> => {
+        let acquired: ManagedProcess | undefined;
+        let cleanupDirectory: string | undefined;
+        const operation = Effect.gen(function* () {
           const existing = yield* prepareStart(state, healthCheck, () =>
             statusSnapshot(state, cwd),
           );
           if (existing) return existing;
-          state.phase = "starting";
-          state.error = undefined;
-          const parts = commandParts(config, [
-            "proxy",
-            "start",
-            "--allow-reload",
-            "--cert-dir",
-            certDirectory,
-          ]);
-          const handle = yield* Effect.provideService(
-            processService
-              .spawn({ ...parts, cwd, env: ambientEnvironment, terminateGraceMs: 500 })
-              .pipe(Effect.mapError((error) => fromProcessError(error, "start_failed"))),
-            Scope.Scope,
-            managerScope,
-          ).pipe(
-            Effect.catch((error) =>
-              Effect.gen(function* () {
-                clearCapability("failed", error);
-                return yield* Effect.fail(error);
-              }),
-            ),
-          );
-          state.process = handle;
-          const result = yield* waitForSession(handle).pipe(
-            Effect.flatMap((session) =>
-              readEnvironment(session).pipe(
-                Effect.map((environment) => ({ session, environment })),
+          return yield* Effect.gen(function* () {
+            state.phase = "starting";
+            state.error = undefined;
+            cleanupDirectory = certDirectory;
+            if (!certDirectory) {
+              const acquiredDirectory = yield* acquireCertDirectory(
+                (directory) => (cleanupDirectory = directory),
+              );
+              certDirectory = acquiredDirectory.directory;
+              certDirectoryReal = acquiredDirectory.canonical;
+            }
+            const parts = commandParts(config, [
+              "proxy",
+              "start",
+              "--allow-reload",
+              "--cert-dir",
+              certDirectory!,
+            ]);
+            const handle = yield* Effect.provideService(
+              processService
+                .spawn({ ...parts, cwd, env: ambientEnvironment, terminateGraceMs: 500 })
+                .pipe(Effect.mapError((error) => fromProcessError(error, "start_failed"))),
+              Scope.Scope,
+              managerScope,
+            );
+            acquired = handle;
+            state.process = handle;
+            const result = yield* waitForSession(handle).pipe(
+              Effect.flatMap((session) =>
+                readEnvironment(session).pipe(
+                  Effect.map((environment) => ({ session, environment })),
+                ),
               ),
-            ),
+              Effect.catch((error) =>
+                Effect.gen(function* () {
+                  yield* handle.stop.pipe(Effect.catch(() => Effect.void));
+                  state.process = undefined;
+                  return yield* Effect.fail(error);
+                }),
+              ),
+            );
+            yield* validateStartupEgress(state, config.requireStrictEgress, result.session, handle);
+            state.session = result.session;
+            state.environment = result.environment;
+            state.phase = "ready";
+            state.error = undefined;
+            return statusSnapshot(state, cwd);
+          }).pipe(
             Effect.catch((error) =>
               Effect.gen(function* () {
-                yield* handle.stop.pipe(Effect.catch(() => Effect.void));
-                state.process = undefined;
-                clearCapability("failed", error);
+                if (error.code !== "disposed") clearCapability("failed", error);
                 return yield* Effect.fail(error);
               }),
             ),
+            Effect.onInterrupt(() => interruptedStartCleanup(acquired, cleanupDirectory)),
           );
-          yield* validateStartupEgress(
-            state,
-            config.requireStrictEgress,
-            result.session,
-            handle,
-            clearCapability,
-          );
-          state.session = result.session;
-          state.environment = result.environment;
-          state.phase = "ready";
-          state.error = undefined;
-          return statusSnapshot(state, cwd);
         });
+        // Do not attach ownership cleanup until preflight has completed: a
+        // cancelled health check must not tear down a process owned by an
+        // earlier successful start.
+        return operation;
+      };
 
       const exclusive = <A>(effect: Effect.Effect<A, VarlockError>) => lock.withPermit(effect);
       const ensureStarted = exclusive(startInternal());
@@ -658,10 +723,13 @@ export function makeProjectKeyFerryManager(
           }),
         ),
       );
-      const refresh = exclusive(refreshInternal);
+      const interruptedRefresh = refreshInternal.pipe(
+        Effect.onInterrupt(() => interruptedStartCleanup(state.process, certDirectory)),
+      );
+      const refresh = exclusive(interruptedRefresh);
       const refreshReady = exclusive(
         Effect.gen(function* () {
-          const status = yield* refreshInternal;
+          const status = yield* interruptedRefresh;
           if (!state.environment) return yield* Effect.fail(safeError("not_ready", true));
           return { status, environment: state.environment };
         }),
@@ -693,7 +761,7 @@ export function makeProjectKeyFerryManager(
         withExclusive: <A, E, R>(effect: Effect.Effect<A, E, R>) => lock.withPermit(effect),
       };
       yield* Effect.addFinalizer(() =>
-        Effect.promise(() => rm(certDirectory, { recursive: true, force: true })),
+        Effect.forEach([...ownedCertDirectories], removeOwnedDirectory, { discard: true }),
       );
       // Finalizers run in reverse registration order, so stop the sidecar
       // before removing the directory that contains its CA.

@@ -39,6 +39,28 @@ test("decodes bounded session JSON and never preserves token fields", () => {
   assert.equal("dataPlaneToken" in session, false);
 });
 
+test("preserves optional session fields only when supplied", () => {
+  const [session] = decodeSessionList(
+    sessionJson({ egressMode: "permissive", placeholderOverrides: undefined }),
+  );
+  assert.equal(session.egressMode, "permissive");
+  assert.equal("endedAt" in session, false);
+  assert.equal("placeholderOverrides" in session, false);
+});
+
+test("preserves policy validation priority", () => {
+  assert.throws(
+    () => decodeSessionList(sessionJson({ egressMode: "audit", ownerPid: 0 })),
+    (error: unknown) =>
+      error instanceof VarlockProtocolError && error.message === "invalid Varlock egress mode",
+  );
+  assert.throws(
+    () => decodeSessionList(sessionJson({ egressMode: "strict", ownerPid: 0 })),
+    (error: unknown) =>
+      error instanceof VarlockProtocolError && error.message === "invalid Varlock owner PID",
+  );
+});
+
 test("requires exact PID, UUID, and cwd ownership", () => {
   const [session] = decodeSessionList(sessionJson());
   assert.equal(

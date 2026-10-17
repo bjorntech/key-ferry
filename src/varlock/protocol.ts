@@ -144,30 +144,73 @@ function parseJson(input: string): unknown {
   }
 }
 
-function decodeSession(value: unknown): VarlockSessionRecord {
-  if (!isRecord(value)) fail("invalid Varlock session record");
-  const egressMode = value.egressMode;
-  if (egressMode !== "permissive" && egressMode !== "strict") fail("invalid Varlock egress mode");
-  if (!Number.isSafeInteger(value.ownerPid) || (value.ownerPid as number) <= 0)
-    fail("invalid Varlock owner PID");
-  const session: VarlockSessionRecord = {
+type SessionCoreFields = Pick<
+  VarlockSessionRecord,
+  "id" | "uuid" | "cwd" | "startedAt" | "updatedAt" | "endedAt"
+>;
+
+function decodeSessionCore(value: Record<string, unknown>): SessionCoreFields {
+  return {
     id: boundedString(value.id, "session id", 128),
     uuid: boundedString(value.uuid, "session UUID", 128),
-    ownerPid: value.ownerPid as number,
     cwd: boundedString(value.cwd, "session cwd"),
     startedAt: boundedString(value.startedAt, "session start time", 128),
     updatedAt: boundedString(value.updatedAt, "session update time", 128),
     ...(value.endedAt !== undefined
       ? { endedAt: boundedString(value.endedAt, "session end time", 128) }
       : {}),
-    egressMode,
-    env: boundedMap(value.env, "session environment"),
   };
+}
+
+function decodeSessionEgress(value: unknown): VarlockSessionRecord["egressMode"] {
+  if (value !== "permissive" && value !== "strict") fail("invalid Varlock egress mode");
+  return value;
+}
+
+function decodeSessionOwnerPid(value: unknown): number {
+  if (!Number.isSafeInteger(value) || (value as number) <= 0) fail("invalid Varlock owner PID");
+  return value as number;
+}
+
+function decodeSessionPolicy(
+  value: Record<string, unknown>,
+): Pick<VarlockSessionRecord, "ownerPid" | "egressMode"> {
+  const egressMode = decodeSessionEgress(value.egressMode);
+  const ownerPid = decodeSessionOwnerPid(value.ownerPid);
+  return {
+    ownerPid,
+    egressMode,
+  };
+}
+
+function decodeSessionEnvironment(
+  value: Record<string, unknown>,
+): Pick<VarlockSessionRecord, "env" | "placeholderOverrides"> {
+  const env = boundedMap(value.env, "session environment");
   if (value.placeholderOverrides !== undefined) {
-    (session as { placeholderOverrides?: Readonly<Record<string, string>> }).placeholderOverrides =
-      boundedMap(value.placeholderOverrides, "placeholder overrides");
+    return {
+      env,
+      placeholderOverrides: boundedMap(value.placeholderOverrides, "placeholder overrides"),
+    };
   }
-  return session;
+  return { env };
+}
+
+function decodeSession(value: unknown): VarlockSessionRecord {
+  if (!isRecord(value)) fail("invalid Varlock session record");
+  const core = decodeSessionCore(value);
+  const policy = decodeSessionPolicy(value);
+  return {
+    id: core.id,
+    uuid: core.uuid,
+    ownerPid: policy.ownerPid,
+    cwd: core.cwd,
+    startedAt: core.startedAt,
+    updatedAt: core.updatedAt,
+    ...(core.endedAt === undefined ? {} : { endedAt: core.endedAt }),
+    egressMode: policy.egressMode,
+    ...decodeSessionEnvironment(value),
+  };
 }
 
 /** Decode only the JSON array emitted by `varlock proxy status --format json`. */

@@ -15,6 +15,7 @@ import { statementsFromIstanbul } from "../scripts/crap/coverage.js";
 import { functionFingerprint } from "../scripts/crap/fingerprint.js";
 import { crapScore, round } from "../scripts/crap/model.js";
 import { evaluate } from "../scripts/crap/policy.js";
+import { verifyMetricEntries } from "../scripts/crap/verify-baseline.js";
 
 const source = (text: string) =>
   ts.createSourceFile("fixture.ts", text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
@@ -45,6 +46,98 @@ describe("CRAP metrics", () => {
       .statements[0] as ts.FunctionDeclaration;
     expect(functionFingerprint(a, a.getSourceFile())).toBe(
       functionFingerprint(b, b.getSourceFile()),
+    );
+  });
+
+  test("fingerprints include the complete owning function body", () => {
+    const a = source("function f(value: boolean) { if (value) return 1; return 0 }")
+      .statements[0] as ts.FunctionDeclaration;
+    const b = source("function f(value: boolean) { if (value) return 2; return 0 }")
+      .statements[0] as ts.FunctionDeclaration;
+    expect(functionFingerprint(a, a.getSourceFile())).not.toBe(
+      functionFingerprint(b, b.getSourceFile()),
+    );
+  });
+
+  test("identities do not depend on unrelated declaration positions", () => {
+    const before = analyzeFile(
+      "fixture.ts",
+      "function helper(value: boolean) { return value }\nconst callback = (value: boolean) => value;",
+      undefined,
+    );
+    const after = analyzeFile(
+      "fixture.ts",
+      "interface Unrelated { value: string }\nconst other = 1;\nfunction helper(value: boolean) { return value }\nconst callback = (value: boolean) => value;",
+      undefined,
+    );
+    expect(after.map((metric) => metric.identity)).toEqual(before.map((metric) => metric.identity));
+  });
+
+  test("identities use stable project-relative POSIX file paths", () => {
+    const root = mkdtempSync(join(tmpdir(), "crap-paths-"));
+    try {
+      const text = "function isRecord(value: unknown) { return typeof value === 'object' }";
+      const relativeMetric = analyzeFile("src/options.ts", text, undefined, root)[0];
+      const absoluteMetric = analyzeFile(join(root, "src/options.ts"), text, undefined, root)[0];
+      expect(absoluteMetric.identity).toBe(relativeMetric.identity);
+      expect(absoluteMetric.file).toBe("src/options.ts");
+      const other = analyzeFile("src/protocol.ts", text, undefined, root)[0];
+      expect(other.identity).not.toBe(relativeMetric.identity);
+      expect(() => analyzeFile(join(root, "../outside.ts"), text, undefined, root)).toThrow(
+        "outside project root",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("nested function body changes affect only the nested fingerprint", () => {
+    const a = analyzeFile("fixture.ts", "function outer() { return () => 1 }", undefined);
+    const b = analyzeFile("fixture.ts", "function outer() { return () => 2 }", undefined);
+    expect(a[0].fingerprint).toBe(b[0].fingerprint);
+    expect(a[1].fingerprint).not.toBe(b[1].fingerprint);
+  });
+
+  test("nested declaration semantics affect the outer fingerprint without nesting its body", () => {
+    const original = analyzeFile(
+      "fixture.ts",
+      "function outer() { return function child(value = 1) { return value } }",
+      undefined,
+    );
+    expect(original[0].fingerprint).not.toBe(
+      analyzeFile(
+        "fixture.ts",
+        "function outer() { return function renamed(value = 1) { return value } }",
+        undefined,
+      )[0].fingerprint,
+    );
+    expect(
+      analyzeFile(
+        "fixture.ts",
+        "function outer() { return function child(value = 2) { return value } }",
+        undefined,
+      )[0].fingerprint,
+    ).not.toBe(original[0].fingerprint);
+    expect(
+      analyzeFile(
+        "fixture.ts",
+        "function outer() { return function child(value = 1) { return 99 } }",
+        undefined,
+      )[0].fingerprint,
+    ).toBe(original[0].fingerprint);
+  });
+
+  test("nested arrow binding and function modifiers are semantic", () => {
+    const fingerprint = (text: string) => analyzeFile("fixture.ts", text, undefined)[0].fingerprint;
+    expect(
+      fingerprint("function outer() { return async function* child(value = 1) { yield value } }"),
+    ).not.toBe(
+      fingerprint("function outer() { return async function* renamed(value = 1) { yield value } }"),
+    );
+    expect(
+      fingerprint("function outer() { const child = (value = 1) => value; return child }"),
+    ).not.toBe(
+      fingerprint("function outer() { const renamed = (value = 1) => value; return renamed }"),
     );
   });
 
@@ -138,6 +231,19 @@ describe("CRAP metrics", () => {
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }
+  });
+
+  test("baseline verification checks historical complexity, not only identity", () => {
+    const metric = analyzeFile(
+      "fixture.ts",
+      "function f(value: boolean) { if (value) return 1; return 0 }",
+      undefined,
+    )[0];
+    const baseline = { ...metric, coverage: 0, crap: 4 };
+    expect(() =>
+      verifyMetricEntries([{ ...baseline, complexity: baseline.complexity + 1 }], [metric]),
+    ).toThrow("complexity mismatch");
+    expect(() => verifyMetricEntries([baseline], [metric])).not.toThrow();
   });
 
   test("attributes statements to the function owning them", () => {

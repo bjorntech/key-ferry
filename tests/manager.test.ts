@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { chmodSync, existsSync, mkdirSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
-import { Context, Effect, Layer } from "effect";
+import { Context, Effect, Fiber, Layer } from "effect";
 import { ProjectKeyFerryManager, VarlockError, projectDirectory } from "../src/contracts.js";
 import { makePlugin } from "../src/plugin.js";
 import {
@@ -39,6 +42,8 @@ type Fake = {
   strict: boolean;
   certMode: number;
   certKind: "owned" | "outside" | "symlink";
+  healthGate?: Promise<void>;
+  healthStarted?: () => void;
 };
 
 function fakeProcess(): Fake {
@@ -60,14 +65,27 @@ function fakeProcess(): Fake {
   const managed = (input: SpawnInput): ManagedProcess => ({
     pid: 9001,
     completion: Effect.never,
-    health: Effect.sync(() => ({
-      pid: 9001,
-      running: state.alive,
-      ...(state.alive ? {} : { exit }),
-    })),
+    health: Effect.suspend(() =>
+      state.healthGate
+        ? Effect.promise(() => {
+            state.healthStarted?.();
+            return state.healthGate!.then(() => ({
+              pid: 9001,
+              running: state.alive,
+              ...(state.alive ? {} : { exit }),
+            }));
+          })
+        : Effect.sync(() => ({
+            pid: 9001,
+            running: state.alive,
+            ...(state.alive ? {} : { exit }),
+          })),
+    ),
     stop: Effect.sync(() => {
-      state.stops.push(9001);
-      state.alive = false;
+      if (state.alive) {
+        state.stops.push(9001);
+        state.alive = false;
+      }
     }),
   });
   state.service = {
@@ -149,7 +167,11 @@ function fakeProcess(): Fake {
   return state;
 }
 
-function layer(fake: Fake, extra: Record<string, unknown> = {}) {
+function layer(
+  fake: Fake,
+  extra: Record<string, unknown> = {},
+  fileOps?: { mkdtemp: typeof mkdtemp; realpath: typeof realpath; rm: typeof rm },
+) {
   return makeProjectKeyFerryManager(
     {
       projectDirectory: projectDirectory(fixtureProject),
@@ -161,6 +183,7 @@ function layer(fake: Fake, extra: Record<string, unknown> = {}) {
       },
     },
     Layer.succeed(Process, Process.of(fake.service)),
+    fileOps,
   );
 }
 
@@ -172,6 +195,18 @@ async function inManager<A>(
     const manager = yield* ProjectKeyFerryManager;
     return yield* effect(manager);
   }).pipe(Effect.provide(layer(fake)));
+  return Effect.runPromise(Effect.scoped(program));
+}
+
+async function inManagerWithLayer<A>(
+  fake: Fake,
+  fileOps: { mkdtemp: typeof mkdtemp; realpath: typeof realpath; rm: typeof rm },
+  effect: (manager: ProjectKeyFerryManager["Service"]) => Effect.Effect<A, VarlockError>,
+) {
+  const program = Effect.gen(function* () {
+    const manager = yield* ProjectKeyFerryManager;
+    return yield* effect(manager);
+  }).pipe(Effect.provide(layer(fake, {}, fileOps)));
   return Effect.runPromise(Effect.scoped(program));
 }
 
@@ -219,6 +254,7 @@ async function runRealPlugin(fake: Fake, operation: "startup" | "refresh") {
 
 test("starts lazily, returns only placeholder-backed requested keys, and disposes its child", async () => {
   const fake = fakeProcess();
+  const originalRun = fake.service.run;
   const result = await inManager(fake, (manager) =>
     Effect.gen(function* () {
       const before = yield* manager.status;
@@ -463,4 +499,273 @@ test("unexpected process death clears readiness without throwing status", async 
   );
   assert.equal(result.phase, "degraded");
   assert.equal(result.error?.code, "unavailable");
+});
+
+test("cancelling preflight health preserves the previously ready capability", async () => {
+  const fake = fakeProcess();
+  let release!: () => void;
+  const healthGate = new Promise<void>((resolve) => (release = resolve));
+  let healthStarted!: () => void;
+  const started = new Promise<void>((resolve) => (healthStarted = resolve));
+  const result = await inManager(fake, (manager) =>
+    Effect.gen(function* () {
+      yield* manager.ensureStarted;
+      const before = yield* manager.status;
+      fake.healthGate = healthGate;
+      fake.healthStarted = healthStarted;
+      const startup = yield* Effect.forkScoped(manager.ensureStarted);
+      yield* Effect.promise(() => started);
+      yield* Fiber.interrupt(startup);
+      fake.healthGate = undefined;
+      release();
+      const after = yield* manager.status;
+      const environment = yield* manager.environment;
+      return { before, after, environment };
+    }),
+  );
+
+  assert.equal(result.before.phase, "ready");
+  assert.equal(result.after.phase, "ready");
+  assert.equal(result.after.generation, result.before.generation);
+  assert.equal(result.after.pid, result.before.pid);
+  assert.equal(result.environment.OPENAI_API_KEY, "sk-placeholder");
+  assert.deepEqual(fake.starts, [9001]);
+  assert.deepEqual(fake.stops, [9001]);
+});
+
+test("failed canonical cert-path setup is coherent and retryable", async () => {
+  const fake = fakeProcess();
+  const originalRun = fake.service.run;
+  let signalStarted!: () => void;
+  const started = new Promise<void>((resolve) => (signalStarted = resolve));
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  let failCanonical = false;
+  let candidate!: string;
+  const fileOps = {
+    mkdtemp: async (prefix: string) => {
+      candidate = await mkdtemp(prefix);
+      return candidate;
+    },
+    realpath: async (path: string) => {
+      if (failCanonical) throw new Error("injected realpath failure");
+      return realpath(path);
+    },
+    rm,
+  };
+  fake.service.run = (input: RunInput) => {
+    if (input.args.includes("proxy") && input.args.includes("status")) {
+      signalStarted();
+      return Effect.promise(() => gate.then(() => Effect.runPromise(originalRun(input))));
+    }
+    return originalRun(input);
+  };
+  const result = await inManagerWithLayer(fake, fileOps, (manager) =>
+    Effect.gen(function* () {
+      const startup = yield* Effect.forkScoped(manager.ensureStarted);
+      yield* Effect.promise(() => started);
+      yield* Fiber.interrupt(startup);
+      failCanonical = true;
+      release();
+      const failure = yield* manager.ensureStarted.pipe(Effect.flip);
+      const failed = yield* manager.status;
+      failCanonical = false;
+      const retry = yield* manager.ensureStarted;
+      return { failure, failed, retry };
+    }),
+  );
+
+  assert.equal(result.failure.code, "start_failed");
+  assert.equal(result.failed.phase, "failed");
+  assert.equal(result.retry.phase, "ready");
+  assert.equal(existsSync(candidate), false);
+  assert.deepEqual(fake.starts, [9001, 9001]);
+});
+
+test("late cert-directory creation after cancellation is finalized and retryable", async () => {
+  const fake = fakeProcess();
+  let resolveCreation!: (directory: string) => void;
+  let signalCreationStarted!: () => void;
+  const creationStarted = new Promise<void>((resolve) => (signalCreationStarted = resolve));
+  let first = true;
+  let lateDirectory!: string;
+  let retryDirectory!: string;
+  const fileOps = {
+    mkdtemp: (prefix: string) => {
+      if (!first) {
+        return mkdtemp(prefix).then((directory) => {
+          retryDirectory = directory;
+          return directory;
+        });
+      }
+      first = false;
+      signalCreationStarted();
+      return new Promise<string>((resolve) => (resolveCreation = resolve));
+    },
+    realpath,
+    rm,
+  };
+  const result = await inManagerWithLayer(fake, fileOps, (manager) =>
+    Effect.gen(function* () {
+      const startup = yield* Effect.forkScoped(manager.ensureStarted);
+      yield* Effect.promise(() => creationStarted);
+      yield* Effect.sync(() => startup.interruptUnsafe());
+      yield* Effect.yieldNow;
+      lateDirectory = yield* Effect.promise(() => mkdtemp(join(tmpdir(), "key-ferry-late-")));
+      resolveCreation(lateDirectory);
+      yield* Effect.exit(Fiber.join(startup));
+      const interrupted = yield* manager.status;
+      const retry = yield* manager.ensureStarted;
+      return { interrupted, retry };
+    }),
+  );
+
+  assert.equal(result.interrupted.phase, "failed");
+  assert.equal(result.interrupted.generation, 1);
+  assert.equal(result.retry.phase, "ready");
+  assert.notEqual(retryDirectory, lateDirectory);
+  assert.equal(existsSync(lateDirectory), false);
+});
+
+test("cert cleanup failure retains the path for finalizer retry", async () => {
+  const fake = fakeProcess();
+  const originalRun = fake.service.run;
+  let signalStarted!: () => void;
+  const started = new Promise<void>((resolve) => (signalStarted = resolve));
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const directories: string[] = [];
+  let failRemove = true;
+  const fileOps = {
+    mkdtemp: async (prefix: string) => {
+      const directory = await mkdtemp(prefix);
+      directories.push(directory);
+      return directory;
+    },
+    realpath,
+    rm: async (path: string, options: Parameters<typeof rm>[1]) => {
+      if (failRemove) {
+        failRemove = false;
+        throw new Error("injected rm failure");
+      }
+      return rm(path, options);
+    },
+  };
+  fake.service.run = (input: RunInput) => {
+    if (input.args.includes("proxy") && input.args.includes("status")) {
+      signalStarted();
+      return Effect.promise(() => gate.then(() => Effect.runPromise(originalRun(input))));
+    }
+    return originalRun(input);
+  };
+
+  await inManagerWithLayer(fake, fileOps, (manager) =>
+    Effect.gen(function* () {
+      const startup = yield* Effect.forkScoped(manager.ensureReady);
+      yield* Effect.promise(() => started);
+      yield* Fiber.interrupt(startup);
+      release();
+      return yield* manager.ensureReady;
+    }),
+  );
+
+  assert.equal(directories.length, 2);
+  assert.equal(existsSync(directories[0]!), false);
+  assert.equal(existsSync(directories[1]!), false);
+});
+
+test("interrupting startup stops the acquired handle and invalidates its capability", async () => {
+  const fake = fakeProcess();
+  const originalRun = fake.service.run;
+  let signalStarted!: () => void;
+  const started = new Promise<void>((resolve) => (signalStarted = resolve));
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  fake.service.run = (input: RunInput) => {
+    if (input.args.includes("proxy") && input.args.includes("status")) {
+      signalStarted();
+      return Effect.promise(() => gate.then(() => Effect.runPromise(originalRun(input))));
+    }
+    return originalRun(input);
+  };
+
+  const result = await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const manager = yield* ProjectKeyFerryManager;
+        const startup = yield* Effect.forkScoped(manager.ensureReady);
+        yield* Effect.promise(() => started);
+        const firstCertDirectory = fake.spawnCertDir!;
+        yield* Fiber.interrupt(startup);
+        const interrupted = yield* manager.status;
+        release();
+        const retry = yield* manager.ensureReady;
+        return { interrupted, retry, firstCertDirectory };
+      }).pipe(Effect.provide(layer(fake))),
+    ),
+  );
+
+  assert.equal(result.interrupted.phase, "failed");
+  assert.equal(result.interrupted.generation, 1);
+  assert.equal(result.interrupted.error?.code, "timeout");
+  assert.equal(result.retry.status.phase, "ready");
+  assert.equal(fake.starts.length, 2);
+  assert.deepEqual(fake.stops, [9001]);
+  assert.equal(existsSync(result.firstCertDirectory), false);
+});
+
+test("interrupting spawn cleanup leaves no claimed handle and keeps the permit usable", async () => {
+  const fake = fakeProcess();
+  let signalSpawn!: () => void;
+  const spawned = new Promise<void>((resolve) => (signalSpawn = resolve));
+  fake.service.spawn = () => Effect.sync(signalSpawn).pipe(Effect.andThen(Effect.never));
+  const result = await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const manager = yield* ProjectKeyFerryManager;
+        const startup = yield* Effect.forkScoped(manager.ensureStarted);
+        yield* Effect.promise(() => spawned);
+        yield* Fiber.interrupt(startup);
+        return yield* manager.status;
+      }).pipe(Effect.provide(layer(fake))),
+    ),
+  );
+
+  assert.equal(result.phase, "failed");
+  assert.equal(result.generation, 1);
+  assert.equal(fake.stops.length, 0);
+});
+
+test("interrupting refresh closes the old environment capability", async () => {
+  const fake = fakeProcess();
+  const originalRun = fake.service.run;
+  let signalReload!: () => void;
+  const reloading = new Promise<void>((resolve) => (signalReload = resolve));
+  const result = await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const manager = yield* ProjectKeyFerryManager;
+        // Establish readiness before replacing the fake command behavior.
+        fake.service.run = (input: RunInput) => {
+          if (input.args.includes("reload")) {
+            signalReload();
+            return Effect.never;
+          }
+          return originalRun(input);
+        };
+        yield* manager.ensureStarted;
+        const refresh = yield* Effect.forkScoped(manager.refresh);
+        yield* Effect.promise(() => reloading);
+        yield* Fiber.interrupt(refresh);
+        const status = yield* manager.status;
+        const environment = yield* manager.environment.pipe(Effect.flip);
+        return { status, environment };
+      }).pipe(Effect.provide(layer(fake))),
+    ),
+  );
+
+  assert.equal(result.status.phase, "failed");
+  assert.equal(result.status.generation, 1);
+  assert.equal(result.environment.code, "not_ready");
+  assert.deepEqual(fake.stops, [9001]);
 });

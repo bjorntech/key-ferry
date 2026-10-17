@@ -67,49 +67,79 @@ export function functionIdentity(
   source: ts.SourceFile,
   ancestors: readonly ts.Node[],
 ): string {
-  const childIndex = (container: ts.Node, child: ts.Node): number => {
-    let index = -1;
-    let found = -1;
-    ts.forEachChild(container, (candidate) => {
-      index += 1;
-      if (candidate === child) found = index;
-      return undefined;
-    });
-    return found;
-  };
-  const owner = [...ancestors]
-    .reverse()
-    .find(
-      (ancestor) =>
-        ts.isClassDeclaration(ancestor) ||
-        ts.isClassExpression(ancestor) ||
-        ts.isObjectLiteralExpression(ancestor),
-    );
-  const ownerName =
-    owner && (ts.isClassDeclaration(owner) || ts.isClassExpression(owner)) && owner.name
-      ? owner.name.text
-      : owner
-        ? "object"
-        : "module";
-  let local = functionName(node, source);
   const parent = ancestors.at(-1);
-  if (ts.isVariableDeclaration(parent)) local = parent.name.getText(source);
-  if (local === "<anonymous>") {
-    const parentChildren = parent
-      ? [...parent.getChildren(source)].filter((child) => isFunction(child))
-      : [];
-    local = `callback#${Math.max(0, parentChildren.indexOf(node))}`;
+  const nodeParent = new Map<ts.Node, ts.Node | undefined>();
+  const functionParent = new Map<ts.Node, ts.FunctionLikeDeclaration | undefined>();
+  const allFunctions: ts.FunctionLikeDeclaration[] = [];
+  const collectFunctions = (current: ts.Node, enclosing?: ts.FunctionLikeDeclaration): void => {
+    const next = isFunction(current) ? current : enclosing;
+    if (isFunction(current)) {
+      functionParent.set(current, enclosing);
+      allFunctions.push(current);
+    }
+    ts.forEachChild(current, (child) => {
+      nodeParent.set(child, current);
+      collectFunctions(child, next);
+    });
+  };
+  collectFunctions(source);
+  const findParent = (candidate: ts.Node): ts.Node | undefined => nodeParent.get(candidate);
+  const className = (ancestor: ts.Node): string | undefined =>
+    (ts.isClassDeclaration(ancestor) || ts.isClassExpression(ancestor)) && ancestor.name
+      ? ancestor.name.text
+      : undefined;
+  const named = (candidate: ts.FunctionLikeDeclaration, immediate: ts.Node | undefined): string => {
+    if (ts.isFunctionDeclaration(candidate) && candidate.name) return candidate.name.text;
+    if (
+      (ts.isMethodDeclaration(candidate) ||
+        ts.isGetAccessorDeclaration(candidate) ||
+        ts.isSetAccessorDeclaration(candidate)) &&
+      candidate.name
+    )
+      return candidate.name.getText(source);
+    if (ts.isConstructorDeclaration(candidate)) return "constructor";
+    if (ts.isVariableDeclaration(immediate)) return immediate.name.getText(source);
+    return "";
+  };
+  const callbackRole = (candidate: ts.Node, immediate: ts.Node | undefined): string => {
+    if (immediate && ts.isCallExpression(immediate)) {
+      const index = immediate.arguments.findIndex((argument) => argument === candidate);
+      return `call:${immediate.expression.getText(source)}:arg:${index}`;
+    }
+    if (immediate && ts.isNewExpression(immediate)) {
+      const index = (immediate.arguments ?? []).findIndex((argument) => argument === candidate);
+      return `new:${immediate.expression.getText(source)}:arg:${index}`;
+    }
+    if (immediate && ts.isPropertyAssignment(immediate))
+      return `property:${immediate.name.getText(source)}`;
+    return "callback";
+  };
+  const label = (candidate: ts.FunctionLikeDeclaration, immediate: ts.Node | undefined): string => {
+    const name = named(candidate, immediate);
+    if (name) return name;
+    const role = callbackRole(candidate, immediate);
+    // Ordinal is only among callbacks with the same semantic role. Inserting a
+    // different declaration therefore cannot rename an existing callback.
+    const enclosing = functionParent.get(candidate);
+    const ordinal = allFunctions
+      .filter(
+        (peer) =>
+          functionParent.get(peer) === enclosing && callbackRole(peer, findParent(peer)) === role,
+      )
+      .sort((a, b) => a.getStart(source) - b.getStart(source))
+      .indexOf(candidate);
+    return `${role}#${Math.max(0, ordinal)}`;
+  };
+  const scope: string[] = [];
+  for (let index = 0; index < ancestors.length; index += 1) {
+    const ancestor = ancestors[index];
+    if (isFunction(ancestor)) scope.push(label(ancestor, ancestors[index - 1]));
+    const owner = className(ancestor);
+    if (owner && !scope.includes(owner)) scope.push(owner);
   }
-  const path: string[] = [];
-  for (let index = 1; index < ancestors.length; index += 1) {
-    const container = ancestors[index - 1];
-    const child = ancestors[index];
-    const sibling = childIndex(container, child);
-    path.push(`${container.kind}-${sibling}`);
-  }
-  const sibling = parent ? childIndex(parent, node) : 0;
-  path.push(`${node.kind}-${sibling}`);
-  return `${ownerName}.${local}@${path.join("/")}`;
+  const owner = scope.length ? scope : ["module"];
+  owner.push(label(node, parent));
+  return `${source.fileName}:${owner.join(".")}`;
 }
 
 export function ownStatements(

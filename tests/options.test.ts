@@ -34,8 +34,17 @@ describe("plugin options", () => {
     expect(result.enabled).toBe(false);
   });
 
+  test("disabled options are still fully validated without resolving their project path", () => {
+    expect(() => parseOptions({ enabled: false, command: [] })).toThrow();
+    expect(
+      parseOptions({ enabled: false, projectDirectory: "relative/project" }, undefined, false)
+        .projectDirectory,
+    ).toBe("relative/project");
+  });
+
   test("rejects unbounded or malformed configuration", () => {
     expect(() => parseOptions({ refreshTimeoutMs: 900_001 })).toThrow();
+    expect(() => parseOptions({ servers: null })).toThrow("servers must be an object");
     expect(() => parseOptions({ servers: { tools: { env: [] } } })).toThrow();
     expect(() => parseOptions({ command: [] })).toThrow();
     expect(() => parseOptions({ failClosed: false })).toThrow();

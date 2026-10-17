@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import ts from "typescript";
 import {
   cyclomaticComplexity,
@@ -15,8 +16,20 @@ export function analyzeFile(
   file: string,
   text: string,
   instrumentedCoverage: unknown,
+  projectRoot = process.env.CRAP_REPO_ROOT ?? process.cwd(),
 ): FunctionMetric[] {
-  const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const root = resolve(projectRoot);
+  const absolute = isAbsolute(file) ? resolve(file) : resolve(root, file);
+  const logicalFile = relative(root, absolute).split(sep).join("/");
+  if (logicalFile === ".." || logicalFile.startsWith("../"))
+    throw new Error(`Source file is outside project root: ${file}`);
+  const source = ts.createSourceFile(
+    logicalFile,
+    text,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
   const statements = statementsFromIstanbul(instrumentedCoverage, source);
   const result: FunctionMetric[] = [];
   function visit(node: ts.Node, ancestors: ts.Node[] = []): void {
@@ -28,9 +41,9 @@ export function analyzeFile(
       const end = node.end;
       const identity = functionIdentity(node, source, ancestors);
       result.push({
-        id: `${file}:${start}`,
+        id: `${logicalFile}:${start}`,
         name: functionName(node, source),
-        file,
+        file: logicalFile,
         start,
         end,
         line: source.getLineAndCharacterOfPosition(start).line + 1,
