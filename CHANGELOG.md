@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.11 — 2026-10-17
+
+### Fixed
+
+- Properly re-enable MCPs after project doctor/retry recovery.
+- Retain typed startup errors while safely handling untyped failures.
+
 ## 0.1.10 — 2026-10-17
 
 ### Fixed

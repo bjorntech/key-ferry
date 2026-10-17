@@ -181,14 +181,41 @@ export function makeScopedController(options: ScopedControllerOptions) {
         });
   };
 
+  const safeFailure = (error: unknown, code: "unavailable" | "start_failed" | "refresh_failed") =>
+    error instanceof VarlockError
+      ? error
+      : new VarlockError({
+          code,
+          message: "Key Ferry manager operation failed",
+          retryable: true,
+        });
+
+  const rememberFailure = (
+    runtime: Runtime,
+    error: unknown,
+    code: "unavailable" | "start_failed" | "refresh_failed" = "start_failed",
+  ) => {
+    runtime.status = {
+      phase: "failed",
+      projectDirectory: runtime.group.sourceRoot,
+      generation: runtime.status?.generation ?? 0,
+      ...(runtime.status?.pid === undefined ? {} : { pid: runtime.status.pid }),
+      error: safeFailure(error, code),
+    };
+    runtime.state = emptyProtectionState();
+    apply(editor);
+  };
+
   const clear = (runtime: Runtime, phase: "starting" | "failed" = "starting") =>
     Effect.gen(function* () {
       if (!runtime.active) return;
       runtime.epoch += 1;
+      const previous = runtime.status;
       runtime.status = {
         phase,
         projectDirectory: runtime.group.sourceRoot,
         generation: runtime.status?.generation ?? 0,
+        ...(previous?.error === undefined ? {} : { error: previous.error }),
       };
       runtime.state = emptyProtectionState();
       yield* runtime.remote.stopAll;
@@ -255,15 +282,10 @@ export function makeScopedController(options: ScopedControllerOptions) {
             Effect.flatMap(({ status, environment }) =>
               runtime.active ? reconcile(runtime, status, environment, epoch) : Effect.void,
             ),
-            Effect.catch((error: VarlockError) =>
+            Effect.catch((error: unknown) =>
               Effect.gen(function* () {
                 if (!runtime.active) return;
-                runtime.status = {
-                  phase: "failed",
-                  projectDirectory: runtime.group.sourceRoot,
-                  generation: runtime.status?.generation ?? 0,
-                  error,
-                };
+                rememberFailure(runtime, error);
                 yield* clear(runtime, "failed");
               }),
             ),
@@ -412,19 +434,7 @@ export function makeScopedController(options: ScopedControllerOptions) {
       Effect.catch((error: unknown) =>
         kind === "doctor"
           ? Effect.sync(() => {
-              runtime.status = {
-                phase: "failed",
-                projectDirectory: runtime.group.sourceRoot,
-                generation: 0,
-                error:
-                  error instanceof VarlockError
-                    ? error
-                    : new VarlockError({
-                        code: "unavailable",
-                        message: "Key Ferry manager is unavailable",
-                        retryable: true,
-                      }),
-              };
+              rememberFailure(runtime, error, "unavailable");
             }).pipe(Effect.as(undefined))
           : Effect.fail(error),
       ),
@@ -433,14 +443,9 @@ export function makeScopedController(options: ScopedControllerOptions) {
   const operationStarting = (runtime: Runtime, kind: "refresh" | "doctor", lease: BrokerLease) =>
     kind === "doctor"
       ? lease.ensureReady.pipe(
-          Effect.catch((error: VarlockError) =>
+          Effect.catch((error: unknown) =>
             Effect.sync(() => {
-              runtime.status = {
-                phase: "failed",
-                projectDirectory: runtime.group.sourceRoot,
-                generation: runtime.status?.generation ?? 0,
-                error,
-              };
+              rememberFailure(runtime, error);
             }),
           ),
         )
@@ -450,23 +455,32 @@ export function makeScopedController(options: ScopedControllerOptions) {
     Effect.gen(function* () {
       yield* clear(runtime);
       if (kind === "doctor") {
-        yield* options.registry.retry(options.factory, runtime.group.manager).pipe(
-          Effect.catch((error: VarlockError) =>
+        const epoch = runtime.epoch;
+        const result = yield* options.registry.retry(options.factory, runtime.group.manager).pipe(
+          Effect.catch((error) =>
             Effect.sync(() => {
-              runtime.status = {
-                phase: "failed",
-                projectDirectory: runtime.group.sourceRoot,
-                generation: runtime.status?.generation ?? 0,
-                error,
-              };
+              rememberFailure(runtime, error);
+              return undefined;
             }),
           ),
         );
+        if (!result) return;
+        if (!runtimeIsCurrent(runtime, runtimes, epoch)) return;
+        yield* reconcile(runtime, result.status, result.environment, epoch);
+        yield* startObserver(runtime);
         return;
       }
-      const result = yield* options.registry.retry(options.factory, runtime.group.manager);
-      runtime.status = result.status;
-      yield* reconcile(runtime, result.status, result.environment);
+      const epoch = runtime.epoch;
+      const result = yield* options.registry
+        .retry(options.factory, runtime.group.manager)
+        .pipe(
+          Effect.tapError((error) =>
+            Effect.sync(() => rememberFailure(runtime, error, "refresh_failed")),
+          ),
+        );
+      if (!runtimeIsCurrent(runtime, runtimes, epoch)) return;
+      yield* reconcile(runtime, result.status, result.environment, epoch);
+      yield* startObserver(runtime);
     });
 
   const operationRefresh = (runtime: Runtime, lease: BrokerLease) =>
@@ -525,7 +539,11 @@ export function makeScopedController(options: ScopedControllerOptions) {
       return yield* Effect.gen(function* () {
         const prepared = yield* prepareOperation(runtime, kind);
         if (!prepared || (kind === "doctor" && prepared.acquired)) return yield* status;
-        yield* operateCurrent(runtime, kind, prepared.lease);
+        yield* operateCurrent(runtime, kind, prepared.lease).pipe(
+          Effect.tapError((error) =>
+            Effect.sync(() => rememberFailure(runtime, error, "refresh_failed")),
+          ),
+        );
         return yield* status;
       }).pipe(
         Effect.ensuring(
