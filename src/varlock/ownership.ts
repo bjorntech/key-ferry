@@ -1,6 +1,15 @@
 import { execFile } from "node:child_process";
-import { mkdir, readFile, readdir, rm, lstat, rename, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import {
+  mkdir,
+  readFile,
+  readdir,
+  rm,
+  lstat,
+  rename,
+  writeFile,
+  appendFile,
+} from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { join, basename } from "node:path";
 import { promisify } from "node:util";
 
@@ -18,6 +27,21 @@ export interface BrokerOwnershipRecord {
   readonly pid?: number;
   readonly pidStartTime?: string;
   readonly command?: readonly string[];
+  /** Durable identity of the daemon, retained even when the temp record is lost. */
+  readonly proxyPid?: number;
+  readonly proxyStartTime?: string;
+}
+
+export interface ProxyLedgerEntry {
+  readonly version: 1;
+  readonly sessionUuid: string;
+  readonly proxyPid: number;
+  readonly proxyStartTime?: string;
+  readonly ownerPid: number;
+  readonly ownerStartTime?: string;
+  readonly cwd: string;
+  readonly created: string;
+  readonly retiredAt?: string;
 }
 
 export interface OwnershipFileOps {
@@ -28,8 +52,11 @@ export interface OwnershipFileOps {
   readonly lstat?: typeof lstat;
   readonly rename?: typeof rename;
   readonly writeFile: typeof writeFile;
+  readonly appendFile?: typeof appendFile;
   /** Test seam; production uses the per-user temporary directory. */
   readonly directory?: string;
+  /** Optional test seam; production ledgerPath() is durable user state. */
+  readonly ledgerPath?: string;
 }
 const files: OwnershipFileOps = {
   mkdir,
@@ -39,7 +66,67 @@ const files: OwnershipFileOps = {
   lstat,
   rename,
   writeFile,
+  appendFile,
 };
+
+export function ledgerPath(): string {
+  const state = process.env.XDG_STATE_HOME ?? join(homedir(), "Library", "Application Support");
+  return join(state, "key-ferry", "proxy-ledger.jsonl");
+}
+
+export async function appendProxyLedgerEntry(
+  entry: ProxyLedgerEntry,
+  ops: OwnershipFileOps = files,
+  path = ledgerPath(),
+): Promise<void> {
+  if (!ops.appendFile) return;
+  await ops.mkdir(join(path, ".."), { recursive: true, mode: 0o700 });
+  await ops.appendFile(path, `${JSON.stringify(entry)}\n`, { encoding: "utf8", mode: 0o600 });
+}
+
+export async function readProxyLedger(
+  ops: OwnershipFileOps = files,
+  path = ledgerPath(),
+): Promise<ProxyLedgerEntry[]> {
+  if (!ops.appendFile) return [];
+  let text: string;
+  try {
+    text = await ops.readFile(path, "utf8");
+  } catch {
+    return [];
+  }
+  const entries = new Map<string, ProxyLedgerEntry>();
+  for (const line of text.split("\n")) {
+    try {
+      const value = JSON.parse(line);
+      if (
+        value?.version === 1 &&
+        typeof value.sessionUuid === "string" &&
+        Number.isSafeInteger(value.proxyPid) &&
+        Number.isSafeInteger(value.ownerPid) &&
+        typeof value.cwd === "string" &&
+        typeof value.created === "string"
+      ) {
+        if (value.retiredAt) entries.delete(value.sessionUuid);
+        else entries.set(value.sessionUuid, value as ProxyLedgerEntry);
+      }
+    } catch {
+      /* tolerate a torn/corrupt append */
+    }
+  }
+  return [...entries.values()];
+}
+
+async function retireProxyLedgerEntry(
+  entry: ProxyLedgerEntry,
+  ops: OwnershipFileOps,
+): Promise<void> {
+  await appendProxyLedgerEntry(
+    { ...entry, retiredAt: new Date().toISOString() },
+    ops,
+    ops.ledgerPath,
+  );
+}
 const exec = promisify(execFile);
 const inFlightByOps = new WeakMap<
   object,
@@ -238,6 +325,8 @@ export interface OwnershipVerifier {
   readonly isAlive?: (pid: number) => Promise<boolean>;
   readonly startTime?: (pid: number) => Promise<string | undefined>;
   readonly command?: (pid: number) => Promise<readonly string[] | undefined>;
+  /** Read the environment of the actual daemon PID. undefined means unknown. */
+  readonly processEnv?: (pid: number) => Promise<Readonly<Record<string, string>> | undefined>;
   /** The configured executable/prefix used to launch proxy start. */
   readonly expectedCommand?: readonly string[];
   readonly status?: () => Promise<
@@ -248,6 +337,8 @@ export interface OwnershipVerifier {
       readonly cwd?: string;
       /** Explicit Varlock metadata, when supported by the installed CLI. */
       readonly keyFerryMarker?: string;
+      readonly pid?: number;
+      readonly startTime?: string;
     }[]
   >;
   readonly stop: (record: BrokerOwnershipRecord) => Promise<void>;
@@ -288,6 +379,8 @@ async function reapOwnershipRecordsOnce(
     ownerPid?: number;
     cwd?: string;
     keyFerryMarker?: string;
+    pid?: number;
+    startTime?: string;
   }[];
   try {
     sessions = await verifier.status();
@@ -303,37 +396,64 @@ async function reapOwnershipRecordsOnce(
     return { reaped: 0, skipped: records.length };
   }
   const result = await reapActiveRecords(records, sessions, verifier, ops);
-  // Varlock 1.23 does not expose a reliable ownership marker in its normal
-  // status payload.  Only a future/compatible payload carrying the explicit
-  // marker is actionable here; cwd or PPID alone is deliberately ambiguous.
-  const recorded = new Set(records.map((record) => record.sessionUuid));
+  // A durable ledger is the primary positive signal when the temp ownership
+  // record disappeared. The process marker is a compatible fallback for
+  // versions that preserve inherited environment in the daemon.
+  const ledger = await readProxyLedger(ops, ops.ledgerPath);
+  const recordedSessions = new Set(records.map((record) => record.sessionUuid));
   for (const session of sessions) {
-    if (
-      session.endedAt ||
-      session.keyFerryMarker !== "key-ferry" ||
-      recorded.has(session.uuid) ||
-      session.ownerPid === undefined ||
-      session.cwd === undefined ||
-      !verifier.isAlive ||
-      (await verifier.isAlive(session.ownerPid))
-    )
+    if (session.endedAt || recordedSessions.has(session.uuid)) continue;
+    const proxyPid = session.pid ?? session.ownerPid;
+    if (proxyPid === undefined) continue;
+    const entry = ledger.find(
+      (item) =>
+        item.sessionUuid === session.uuid &&
+        item.proxyPid === proxyPid &&
+        (item.proxyStartTime === undefined ||
+          session.startTime === undefined ||
+          item.proxyStartTime === session.startTime),
+    );
+    let positive = entry !== undefined || session.keyFerryMarker === "key-ferry";
+    if (!positive && verifier.processEnv) {
+      const env = await verifier.processEnv(proxyPid).catch(() => undefined);
+      positive = env?.KEY_FERRY_PROXY_MARKER === "key-ferry";
+    }
+    if (!positive || !verifier.isAlive) continue;
+    const ownerPid = entry?.ownerPid ?? session.ownerPid;
+    if (ownerPid === undefined || (await ownerAlive(ownerPid, entry?.ownerStartTime, verifier)))
       continue;
     try {
       await verifier.stop({
         version: 2,
         brokerKeyHash: "f".repeat(64),
         sessionUuid: session.uuid,
-        starterPid: session.ownerPid,
-        cwd: session.cwd,
-        created: new Date().toISOString(),
+        starterPid: ownerPid,
+        ...(entry?.ownerStartTime ? { starterStartTime: entry.ownerStartTime } : {}),
+        cwd: entry?.cwd ?? session.cwd ?? "",
+        created: entry?.created ?? new Date().toISOString(),
+        ...(entry ? { proxyPid: entry.proxyPid } : {}),
+        ...(entry?.proxyStartTime ? { proxyStartTime: entry.proxyStartTime } : {}),
       });
-      if (await sessionGone(session.uuid, verifier)) result.reaped++;
-      else result.skipped++;
+      if (await sessionGone(session.uuid, verifier)) {
+        if (entry) await retireProxyLedgerEntry(entry, ops).catch(() => undefined);
+        result.reaped++;
+      } else result.skipped++;
     } catch {
       result.skipped++;
     }
   }
   return result;
+}
+
+async function ownerAlive(
+  pid: number,
+  expected: string | undefined,
+  verifier: OwnershipVerifier,
+): Promise<boolean> {
+  if (!verifier.isAlive || !(await verifier.isAlive(pid))) return false;
+  if (!expected || !verifier.startTime) return true;
+  const actual = await verifier.startTime(pid);
+  return actual === expected;
 }
 async function reapLegacyRecords(
   records: BrokerOwnershipRecord[],
@@ -380,6 +500,11 @@ async function reapActiveRecords(
   for (const record of records) {
     const active = sessions.find((s) => s.uuid === record.sessionUuid && !s.endedAt);
     if (!active) {
+      if (await sessionGone(record.sessionUuid, verifier)) {
+        const ledger = await readProxyLedger(ops, ops.ledgerPath);
+        const entry = ledger.find((item) => item.sessionUuid === record.sessionUuid);
+        if (entry) await retireProxyLedgerEntry(entry, ops).catch(() => undefined);
+      }
       await removeOwnershipRecord(record.brokerKeyHash, ops);
       lifecycleLoggers.forEach((l) =>
         l({
@@ -405,6 +530,9 @@ async function reapActiveRecords(
         continue;
       }
       await removeOwnershipRecord(record.brokerKeyHash, ops);
+      const ledger = await readProxyLedger(ops, ops.ledgerPath);
+      const entry = ledger.find((item) => item.sessionUuid === record.sessionUuid);
+      if (entry) await retireProxyLedgerEntry(entry, ops).catch(() => undefined);
       lifecycleLoggers.forEach((l) =>
         l({
           event: "stale-reaped",
@@ -455,6 +583,8 @@ export function reapStaleOwnershipRecords(
         // not infer ownership from cwd/PPID; only this explicit marker is
         // accepted for the recordless safety pass.
         keyFerryMarker: session.env?.KEY_FERRY_PROXY_MARKER,
+        pid: session.ownerPid,
+        startTime: session.startedAt,
       }));
     },
     stop: async (record) => {
@@ -476,6 +606,24 @@ export function reapStaleOwnershipRecords(
           timeout: 2_000,
         });
         return result.stdout.trim();
+      } catch {
+        return undefined;
+      }
+    },
+    processEnv: async (pid) => {
+      try {
+        // `ps -E` is available on macOS; on Linux use /proc when present.
+        const result = await exec(
+          process.platform === "darwin" ? "ps" : "sh",
+          process.platform === "darwin"
+            ? ["-Eww", "-p", String(pid), "-o", "command="]
+            : ["-c", `tr '\0' ' ' < /proc/${pid}/environ`],
+          { timeout: 2_000 },
+        );
+        const marker = result.stdout.match(/(?:^|\s)KEY_FERRY_PROXY_MARKER=([^\s]+)/)?.[1];
+        return marker === undefined
+          ? ({} as Readonly<Record<string, string>>)
+          : { KEY_FERRY_PROXY_MARKER: marker };
       } catch {
         return undefined;
       }

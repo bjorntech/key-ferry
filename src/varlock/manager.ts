@@ -23,6 +23,7 @@ import {
 import { classifyStderr } from "./diagnostics.js";
 import {
   removeOwnershipRecord,
+  appendProxyLedgerEntry,
   reapStaleOwnershipRecords,
   writeOwnershipRecord,
   ownershipFileOps,
@@ -536,6 +537,24 @@ export function makeProjectKeyFerryManager(
                 sessionUuid: session.uuid,
                 starterPid: pid,
                 ...(starterStartTime ? { starterStartTime } : {}),
+                cwd,
+                created: new Date().toISOString(),
+              },
+              ownershipFileOps(config.ownershipDirectory ?? ownershipDirectory()),
+            );
+            const proxyStartTime = processService.startTime
+              ? await Effect.runPromise(processService.startTime(session.ownerPid)).catch(
+                  () => undefined,
+                )
+              : undefined;
+            await appendProxyLedgerEntry(
+              {
+                version: 1,
+                sessionUuid: session.uuid,
+                proxyPid: session.ownerPid,
+                ...(proxyStartTime ? { proxyStartTime } : {}),
+                ownerPid: pid,
+                ...(starterStartTime ? { ownerStartTime: starterStartTime } : {}),
                 cwd,
                 created: new Date().toISOString(),
               },
