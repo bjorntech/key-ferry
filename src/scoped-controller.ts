@@ -1,5 +1,5 @@
-import { Effect, Exit, Scope, Stream } from "effect";
-import type { BrokerLease, BrokerRegistry } from "./broker-registry.js";
+import { Cause, Clock, Effect, Exit, Scope, Stream } from "effect";
+import { retryDelayMs, type BrokerLease, type BrokerRegistry } from "./broker-registry.js";
 import type {
   ProjectKeyFerryManagerFactory,
   ResolvedEnvironment,
@@ -145,26 +145,47 @@ export function makeScopedController(options: ScopedControllerOptions) {
     error: unknown,
     code: "unavailable" | "start_failed" | "refresh_failed" = "start_failed",
   ) => {
+    const failure = safeFailure(error, code);
+    const failureAt = runtime.status?.lastFailureAt ?? new Date(Date.now()).toISOString();
+    const nextRetryAt =
+      runtime.status?.nextRetryAt ??
+      (failure.retryable ? new Date(Date.now() + 5_000).toISOString() : undefined);
     runtime.status = {
       phase: "failed",
       projectDirectory: runtime.group.sourceRoot,
       generation: runtime.status?.generation ?? 0,
-      ...(runtime.status?.pid === undefined ? {} : { pid: runtime.status.pid }),
-      error: safeFailure(error, code),
+      lastFailureAt: failureAt,
+      ...Object.fromEntries(
+        Object.entries({ nextRetryAt, pid: runtime.status?.pid }).filter(
+          ([, value]) => value !== undefined,
+        ),
+      ),
+      error: failure,
     };
     runtime.state = emptyProtectionState();
   };
 
-  const clear = (runtime: Runtime, phase: "starting" | "failed" = "starting") =>
+  const clear = (
+    runtime: Runtime,
+    phase: "starting" | "failed" = "starting",
+    failedStatus?: SafeStatus,
+  ) =>
     Effect.gen(function* () {
       if (!runtime.active) return;
       runtime.epoch += 1;
       const previous = runtime.status;
+      const retained = failedStatus ?? (phase === "failed" ? previous : undefined);
       runtime.status = {
         phase,
         projectDirectory: runtime.group.sourceRoot,
         generation: runtime.status?.generation ?? 0,
-        ...(previous?.error === undefined ? {} : { error: previous.error }),
+        ...Object.fromEntries(
+          Object.entries({
+            error: previous?.error,
+            lastFailureAt: retained?.lastFailureAt,
+            nextRetryAt: retained?.nextRetryAt,
+          }).filter(([, value]) => value !== undefined),
+        ),
       };
       runtime.state = emptyProtectionState();
       yield* runtime.remote.stopAll;
@@ -256,9 +277,15 @@ export function makeScopedController(options: ScopedControllerOptions) {
                 if (runtime.active && next.generation >= runtime.observedGeneration)
                   yield* reconcile(runtime, next, environment, epoch);
               })
-            : clear(runtime, next.phase === "failed" ? "failed" : "starting"),
+            : clear(runtime, next.phase === "failed" ? "failed" : "starting", next),
       );
-    }).pipe(Effect.catch(() => Effect.void));
+    }).pipe(
+      Effect.catch((error) =>
+        runtime.active
+          ? Effect.sync(() => rememberFailure(runtime, error, "unavailable"))
+          : Effect.void,
+      ),
+    );
 
   const heartbeat = (runtime: Runtime) =>
     Effect.sleep("30 seconds").pipe(Effect.andThen(heartbeatAfterSleep(runtime)));
@@ -286,7 +313,20 @@ export function makeScopedController(options: ScopedControllerOptions) {
 
   const heartbeatStatus = (runtime: Runtime, lease: BrokerLease, current: SafeStatus) =>
     current.phase !== "ready"
-      ? clear(runtime, current.phase === "failed" ? "failed" : "starting")
+      ? current.phase === "failed"
+        ? options.registry.retryIfDue(options.factory, runtime.group.manager).pipe(
+            Effect.flatMap((result) =>
+              result
+                ? reconcile(runtime, result.status, result.environment, runtime.epoch)
+                : clear(runtime, "failed", current),
+            ),
+            Effect.catch((error) =>
+              Effect.sync(() => {
+                rememberFailure(runtime, error);
+              }),
+            ),
+          )
+        : clear(runtime, "starting")
       : heartbeatReady(runtime, lease, current);
 
   const acquire = (group: ScopedGroup) =>
@@ -313,19 +353,7 @@ export function makeScopedController(options: ScopedControllerOptions) {
         Effect.map((value) => value as BrokerLease),
         Effect.catch((error: unknown) =>
           Effect.sync(() => {
-            runtime.status = {
-              phase: "failed",
-              projectDirectory: group.sourceRoot,
-              generation: 0,
-              error:
-                error instanceof VarlockError
-                  ? error
-                  : new VarlockError({
-                      code: "unavailable",
-                      message: "Key Ferry manager is unavailable",
-                      retryable: true,
-                    }),
-            };
+            rememberFailure(runtime, error, "unavailable");
           }).pipe(Effect.as(undefined)),
         ),
       );
@@ -335,7 +363,7 @@ export function makeScopedController(options: ScopedControllerOptions) {
         yield* subscribeRuntime(runtime).pipe(Effect.forkIn(runtime.scope));
       }
       yield* Effect.forever(heartbeat(runtime)).pipe(
-        Effect.catch(() => Effect.void),
+        Effect.catch((error) => Effect.sync(() => rememberFailure(runtime, error, "unavailable"))),
         Effect.forkIn(runtime.scope),
       );
       return runtime;
@@ -402,7 +430,7 @@ export function makeScopedController(options: ScopedControllerOptions) {
 
   const operationFailed = (runtime: Runtime, kind: "refresh" | "doctor") =>
     Effect.gen(function* () {
-      yield* clear(runtime);
+      yield* clear(runtime, "starting", runtime.status);
       if (kind === "doctor") {
         const epoch = runtime.epoch;
         const result = yield* options.registry.retry(options.factory, runtime.group.manager).pipe(
@@ -420,13 +448,17 @@ export function makeScopedController(options: ScopedControllerOptions) {
         return;
       }
       const epoch = runtime.epoch;
-      const result = yield* options.registry
-        .retry(options.factory, runtime.group.manager)
-        .pipe(
-          Effect.tapError((error) =>
-            Effect.sync(() => rememberFailure(runtime, error, "refresh_failed")),
-          ),
-        );
+      const result = yield* options.registry.retry(options.factory, runtime.group.manager).pipe(
+        Effect.tapError((error) =>
+          Effect.sync(() => rememberFailure(runtime, error, "refresh_failed")),
+        ),
+        Effect.catch((error) =>
+          error instanceof VarlockError && error.code === "not_ready"
+            ? Effect.succeed(undefined)
+            : Effect.fail(error),
+        ),
+      );
+      if (!result) return;
       if (!runtimeIsCurrent(runtime, runtimes, epoch)) return;
       yield* reconcile(runtime, result.status, result.environment, epoch);
       yield* startObserver(runtime);
@@ -434,7 +466,7 @@ export function makeScopedController(options: ScopedControllerOptions) {
 
   const operationRefresh = (runtime: Runtime, lease: BrokerLease) =>
     Effect.gen(function* () {
-      yield* clear(runtime);
+      yield* clear(runtime, "starting", runtime.status);
       const epoch = runtime.epoch;
       if (!runtimes.has("global")) {
         const nextStatus = yield* lease.refresh;
@@ -541,15 +573,37 @@ export function makeScopedController(options: ScopedControllerOptions) {
 
   const replaceProject = (next: ScopedConfiguration) =>
     Effect.gen(function* () {
+      const previousConfiguration = configuration;
       const previous = runtimes.get("project");
-      const previousNames = projectNames(configuration, previous);
+      const previousNames = projectNames(previousConfiguration, previous);
       configuration = next;
-      if (previous) yield* retireProject(previous);
-      inactiveProjectNames = inactiveNames(previousNames, next);
-      const global = updateProjectConfiguration(next);
-      if (next.project && next.activation === "auto") yield* acquire(next.project);
-      yield* options.reload();
-      if (global) global.transitioning = false;
+      yield* Effect.gen(function* () {
+        if (previous) yield* retireProject(previous);
+        inactiveProjectNames = inactiveNames(previousNames, next);
+        const global = updateProjectConfiguration(next);
+        if (next.project && next.activation === "auto") yield* acquire(next.project);
+        yield* options.reload();
+        if (global) global.transitioning = false;
+      }).pipe(
+        Effect.catch((error) =>
+          Effect.gen(function* () {
+            configuration = previousConfiguration;
+            inactiveProjectNames = inactiveNames(previousNames, previousConfiguration);
+            const failedProject = runtimes.get("project");
+            if (failedProject) {
+              failedProject.active = false;
+              runtimes.delete("project");
+              yield* failedProject.remote.stopAll.pipe(Effect.ignore);
+              if (failedProject.lease) yield* failedProject.lease.release.pipe(Effect.ignore);
+              yield* Scope.close(failedProject.scope, Exit.void).pipe(Effect.ignore);
+            }
+            const global = updateProjectConfiguration(previousConfiguration);
+            if (global) global.transitioning = false;
+            yield* options.reload().pipe(Effect.ignore);
+            return yield* Effect.fail(error);
+          }),
+        ),
+      );
     });
 
   /** Polls semantic configuration, so comment-only edits do not reauthenticate. */
@@ -557,15 +611,54 @@ export function makeScopedController(options: ScopedControllerOptions) {
     Effect.forkIn(
       Effect.gen(function* () {
         let previous = configurationFingerprint(configuration);
+        let failedFingerprint: string | undefined;
+        let failedAttempts = 0;
+        let nextRetryAt = 0;
+        let loadFailed = false;
         while (true) {
           yield* Effect.sleep(options.watchIntervalMs ?? 250);
-          const next = yield* Effect.promise(load);
-          const current = configurationFingerprint(next);
-          if (current === previous) continue;
-          previous = current;
-          yield* replaceProject(next);
+          const now = yield* Clock.currentTimeMillis;
+          yield* Effect.tryPromise(load).pipe(
+            Effect.flatMap((next) => {
+              loadFailed = false;
+              const current = configurationFingerprint(next);
+              if (current === previous) return Effect.void;
+              if (current === failedFingerprint && now < nextRetryAt) return Effect.void;
+              return replaceProject(next).pipe(
+                Effect.tap(() =>
+                  Effect.sync(() => {
+                    previous = current;
+                    failedFingerprint = undefined;
+                    failedAttempts = 0;
+                    nextRetryAt = 0;
+                  }),
+                ),
+                Effect.catchCause((cause) =>
+                  Cause.hasInterruptsOnly(cause)
+                    ? Effect.failCause(cause)
+                    : Effect.sync(() => {
+                        failedFingerprint = current;
+                        failedAttempts += 1;
+                        nextRetryAt = now + retryDelayMs(failedAttempts);
+                        for (const runtime of runtimes.values())
+                          rememberFailure(runtime, cause, "unavailable");
+                      }),
+                ),
+              );
+            }),
+            Effect.catchCause((cause) =>
+              Cause.hasInterruptsOnly(cause)
+                ? Effect.failCause(cause)
+                : Effect.sync(() => {
+                    if (loadFailed) return;
+                    loadFailed = true;
+                    for (const runtime of runtimes.values())
+                      rememberFailure(runtime, cause, "unavailable");
+                  }),
+            ),
+          );
         }
-      }).pipe(Effect.catch(() => Effect.void)),
+      }),
       options.scope,
     );
 
@@ -600,6 +693,11 @@ export function makeScopedController(options: ScopedControllerOptions) {
     replaceProject,
     watch,
     dispose,
+    configuration: () => configuration,
+    recordFailure: (error: unknown) =>
+      Effect.sync(() => {
+        for (const runtime of runtimes.values()) rememberFailure(runtime, error, "unavailable");
+      }),
     runtimes,
   };
 }

@@ -7,11 +7,14 @@ import {
   type SafeStatus,
   type ScopeId,
 } from "./contracts.js";
+import { safeStderrMessage } from "./varlock/diagnostics.js";
 
 const statusError = Schema.Struct({
   code: Schema.String,
   message: Schema.String,
   retryable: Schema.Boolean,
+  stderrTail: Schema.optional(Schema.String),
+  stderrCode: Schema.optional(Schema.String),
 });
 
 const scopeId = Schema.Literals(["global", "project"] as const);
@@ -36,6 +39,8 @@ const scopeStatus = Schema.Struct({
   pid: Schema.optional(Schema.Number),
   lastRefreshAt: Schema.optional(Schema.String),
   error: Schema.optional(statusError),
+  lastFailureAt: Schema.optional(Schema.String),
+  nextRetryAt: Schema.optional(Schema.String),
   diagnostics: Schema.optional(Schema.Array(diagnostic)),
   activation: Schema.optional(Schema.Literals(["auto", "manual", "awaiting_activation"] as const)),
 });
@@ -47,6 +52,8 @@ export const SafeStatusSchema = Schema.Struct({
   pid: Schema.optional(Schema.Number),
   endpoint: Schema.optional(Schema.String),
   lastRefreshAt: Schema.optional(Schema.String),
+  lastFailureAt: Schema.optional(Schema.String),
+  nextRetryAt: Schema.optional(Schema.String),
   error: Schema.optional(statusError),
   diagnostics: Schema.optional(Schema.Array(diagnostic)),
   scopes: Schema.optional(Schema.Array(scopeStatus)),
@@ -145,6 +152,8 @@ function sanitizeLegacyFields(status: SafeStatus): Partial<SafeStatus> {
     ...optionalField("pid", status.pid),
     ...optionalField("endpoint", status.endpoint),
     ...optionalField("lastRefreshAt", status.lastRefreshAt),
+    ...optionalField("lastFailureAt", status.lastFailureAt),
+    ...optionalField("nextRetryAt", status.nextRetryAt),
     ...optionalField("error", status.error === undefined ? undefined : sanitizeError(status.error)),
   };
 }
@@ -195,6 +204,8 @@ function sanitizeScopeStatus(status: SafeScopeStatus): SafeScopeStatus {
     generation: status.generation,
     ...optionalField("pid", status.pid),
     ...optionalField("lastRefreshAt", status.lastRefreshAt),
+    ...optionalField("lastFailureAt", status.lastFailureAt),
+    ...optionalField("nextRetryAt", status.nextRetryAt),
     ...optionalField("error", status.error === undefined ? undefined : sanitizeError(status.error)),
     ...optionalField("diagnostics", status.diagnostics?.map(sanitizeDiagnostic)),
     ...optionalField("activation", status.activation),
@@ -203,10 +214,13 @@ function sanitizeScopeStatus(status: SafeScopeStatus): SafeScopeStatus {
 
 function sanitizeError(error: VarlockError): VarlockError {
   const code = isVarlockErrorCode(error.code) ? error.code : "unavailable";
+  const stderrTail = safeStderrMessage(error.stderrCode, error.stderrTail);
   return new VarlockError({
     code,
     message: publicMessage(new VarlockError({ code, message: "", retryable: false })),
     retryable: error.retryable === true,
+    ...(stderrTail ? { stderrTail } : {}),
+    ...(stderrTail && error.stderrCode ? { stderrCode: error.stderrCode } : {}),
   });
 }
 

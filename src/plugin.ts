@@ -197,13 +197,13 @@ export function makePlugin(
     effect: (ctx) => {
       const parsed = parsePluginOptions(ctx);
       if (!parsed.enabled) return Effect.void;
+      let controller: ReturnType<typeof makeScopedController> | undefined;
       const program = Effect.gen(function* () {
         const pluginScope = yield* Effect.scope;
         const controllerReady = yield* Deferred.make<void>();
         const configuration = yield* Effect.promise(() =>
           loadScopedConfiguration(ctx.options, { project: ctx.location.project }),
         );
-        let controller: ReturnType<typeof makeScopedController> | undefined;
         let callbackObserved = false;
         let rpcRegistered = false;
         let bootstrapping = true;
@@ -268,7 +268,9 @@ export function makePlugin(
             yield* Deferred.await(controllerReady);
             const activeController = controller;
             if (!activeController) return;
-            yield* activeController.start.pipe(Effect.catch(() => Effect.void));
+            yield* activeController.start.pipe(
+              Effect.catch((error) => activeController.recordFailure(error)),
+            );
             bootstrapping = false;
             if (parsed.projectConfig.enabled)
               yield* activeController.watch(() =>
@@ -279,12 +281,16 @@ export function makePlugin(
               yield* registerRpc(activeController);
               rpcRegistered = true;
             }
-          }).pipe(Effect.catch(() => Effect.void)),
+          }).pipe(
+            Effect.catch((error) => (controller ? controller.recordFailure(error) : Effect.void)),
+          ),
           pluginScope,
         );
         // Native hosts defer RPC registration until the callback-owned child starts.
       });
-      return program.pipe(Effect.catch(() => Effect.void));
+      return program.pipe(
+        Effect.catch((error) => (controller ? controller.recordFailure(error) : Effect.void)),
+      );
     },
   });
 }
