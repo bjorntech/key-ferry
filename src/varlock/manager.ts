@@ -631,7 +631,37 @@ export function makeProjectKeyFerryManager(
               config.commandTimeoutMs,
               ambientEnvironment,
             ).pipe(
-              Effect.as(true),
+              Effect.flatMap(() => {
+                const verify = (attempt: number): Effect.Effect<boolean, never> =>
+                  runCommand(
+                    processService,
+                    config,
+                    cwd,
+                    ["proxy", "status", "--format", "json"],
+                    config.commandTimeoutMs,
+                    ambientEnvironment,
+                  ).pipe(
+                    Effect.flatMap(({ stdout }) => {
+                      try {
+                        if (
+                          !decodeSessionList(stdout).some(
+                            (item) => item.uuid === session.uuid && item.endedAt === undefined,
+                          )
+                        )
+                          return Effect.succeed(true);
+                      } catch {
+                        // A malformed/failed status is inconclusive.
+                      }
+                      return attempt < 3
+                        ? Effect.sleep(Duration.millis(config.pollIntervalMs)).pipe(
+                            Effect.andThen(verify(attempt + 1)),
+                          )
+                        : Effect.succeed(false);
+                    }),
+                    Effect.catch(() => Effect.succeed(false)),
+                  );
+                return verify(1);
+              }),
               Effect.catch(() =>
                 Effect.sync(() => {
                   config.lifecycleLogger?.({
@@ -858,7 +888,10 @@ export function makeProjectKeyFerryManager(
                 .spawn({
                   ...parts,
                   cwd,
-                  env: ambientEnvironment,
+                  // Varlock versions that expose inherited metadata in
+                  // `proxy status` can use this to identify recordless
+                  // proxies. Older versions simply ignore the variable.
+                  env: { ...ambientEnvironment, KEY_FERRY_PROXY_MARKER: "key-ferry" },
                   terminateGraceMs: 500,
                 })
                 .pipe(Effect.mapError((error) => fromProcessError(error, "start_failed"))),
@@ -913,6 +946,17 @@ export function makeProjectKeyFerryManager(
                   // finalizer can retry the exact UUID without deleting its record.
                   if (state.phase === "failed" && state.session) state.error = failure;
                   else clearCapability("failed", failure);
+                }
+                // Every failure after certificate acquisition must release the
+                // directory, but only after the sidecar stop attempt above.
+                // Retain it when a daemonized session is still alive: the
+                // ownership record/finalizer is then responsible for retrying.
+                if (cleanupDirectory && !state.session) {
+                  if (certDirectory === cleanupDirectory) {
+                    certDirectory = undefined;
+                    certDirectoryReal = undefined;
+                  }
+                  yield* removeOwnedDirectory(cleanupDirectory);
                 }
                 return yield* Effect.fail(failure);
               }),

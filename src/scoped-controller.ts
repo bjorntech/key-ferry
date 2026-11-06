@@ -211,6 +211,7 @@ export function makeScopedController(options: ScopedControllerOptions) {
             runtime.mappings,
             environment,
             status.generation,
+            status.proxySessionId,
           ),
           Scope.Scope,
           options.scope,
@@ -225,10 +226,24 @@ export function makeScopedController(options: ScopedControllerOptions) {
   ) =>
     Effect.gen(function* () {
       if (!runtime.active || runtime.epoch !== expectedEpoch) return;
-      runtime.status = status;
       yield* reconcileRemote(runtime, status, environment);
+      runtime.status = {
+        ...status,
+        ...(runtime.remote.diagnostics.length === 0
+          ? {}
+          : { diagnostics: runtime.remote.diagnostics }),
+      };
       if (!runtimeIsCurrent(runtime, runtimes, expectedEpoch)) {
         yield* runtime.remote.stopAll;
+        return;
+      }
+      // Never reload a draft that points at a dead relay. Removing the
+      // capability is safer than allowing OpenCode to construct a direct,
+      // tokenless remote MCP client; the next heartbeat reacquires it.
+      if (!(yield* runtime.remote.health)) {
+        yield* runtime.remote.stopAll;
+        runtime.state = { ...emptyProtectionState(), explicitlyDisabled };
+        yield* options.reload();
         return;
       }
       runtime.state = {
@@ -278,7 +293,12 @@ export function makeScopedController(options: ScopedControllerOptions) {
                   yield* reconcile(runtime, next, environment, epoch);
               })
             : next.phase === "idle"
-              ? Effect.void
+              ? Effect.gen(function* () {
+                  // Idle means the manager may already have been torn down. Do
+                  // not leave a relay pointing at its last proxy endpoint.
+                  runtime.lease = undefined;
+                  yield* clear(runtime, "starting", next);
+                })
               : clear(runtime, next.phase === "failed" ? "failed" : "starting", next),
       );
     }).pipe(
@@ -294,7 +314,24 @@ export function makeScopedController(options: ScopedControllerOptions) {
 
   const heartbeatAfterSleep = (runtime: Runtime) => {
     const lease = runtime.lease;
-    if (!(lease && runtime.active)) return Effect.void;
+    if (!runtime.active) return Effect.void;
+    if (!lease)
+      return options.registry.acquire(options.factory, runtime.group.manager).pipe(
+        Effect.flatMap((next) => {
+          runtime.lease = next as BrokerLease;
+          const epoch = runtime.epoch;
+          return runtime.lease.ensureReady.pipe(
+            Effect.flatMap(({ status, environment }) =>
+              reconcile(runtime, status, environment, epoch),
+            ),
+          );
+        }),
+        Effect.catch((error) =>
+          Effect.sync(() => {
+            rememberFailure(runtime, error, "unavailable");
+          }),
+        ),
+      );
     return lease.status.pipe(Effect.flatMap((current) => heartbeatStatus(runtime, lease, current)));
   };
 
@@ -314,7 +351,7 @@ export function makeScopedController(options: ScopedControllerOptions) {
         });
 
   const heartbeatStatus = (runtime: Runtime, lease: BrokerLease, current: SafeStatus) =>
-    current.phase !== "ready" && current.phase !== "idle"
+    current.phase !== "ready"
       ? current.phase === "failed"
         ? options.registry.retryIfDue(options.factory, runtime.group.manager).pipe(
             Effect.flatMap((result) =>

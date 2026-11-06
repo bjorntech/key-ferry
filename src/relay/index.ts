@@ -43,6 +43,8 @@ export interface RelayConfig {
   readonly connectTimeoutMs?: number;
   readonly idleTimeoutMs?: number;
   readonly maxConnections?: number;
+  /** Opaque coordinator binding; the relay does not inspect secret values. */
+  readonly binding?: unknown;
 }
 
 export interface RelayHealth {
@@ -394,10 +396,14 @@ const start = (
         if (routes.size >= routesDefault) throw failure("path-denied");
         routes.set(key, target);
       };
-      const reject = (res: ServerResponse, status: number) => {
+      const reject = (res: ServerResponse, status: number, message = "") => {
+        const body = Buffer.from(message);
         if (!res.headersSent)
-          res.writeHead(status, { "content-type": "text/plain", "content-length": "0" });
-        res.end();
+          res.writeHead(status, {
+            "content-type": "text/plain",
+            "content-length": body.byteLength,
+          });
+        res.end(body);
       };
       const handle = (req: IncomingMessage, res: ServerResponse): Effect.Effect<void, never> =>
         Effect.tryPromise({
@@ -514,8 +520,17 @@ const start = (
               // controller in every failure path so the CONNECT tunnel and
               // upstream response cannot outlive this request.
               controller.abort();
-              if (!res.headersSent) reject(res, oversized ? 413 : 502);
-              else res.destroy();
+              if (!res.headersSent) {
+                const unavailable =
+                  cause instanceof RelayError &&
+                  (cause.code === "upstream-connect-failed" ||
+                    cause.code === "upstream-tls-failed");
+                reject(
+                  res,
+                  oversized ? 413 : 502,
+                  unavailable ? "key-ferry relay unavailable; broker connection failed" : "",
+                );
+              } else res.destroy();
             } finally {
               finished = true;
               controllers.delete(controller);

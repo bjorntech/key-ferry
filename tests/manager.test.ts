@@ -52,6 +52,7 @@ function fakeProcess(): Fake {
   state.stops = [];
   state.runs = [];
   state.alive = true;
+  let sessionActive = true;
   state.reloadFails = false;
   state.dieOnReload = false;
   state.hideSessionOnReload = false;
@@ -98,6 +99,7 @@ function fakeProcess(): Fake {
             new ProcessError({ phase: "spawn", code: "spawn-failed", message: "safe" }),
           );
         state.starts.push(9001);
+        sessionActive = true;
         const certDir = index >= 0 ? input.args[index + 1] : undefined;
         if (certDir) {
           certPath = `${certDir}/ca-cert.pem`;
@@ -130,6 +132,7 @@ function fakeProcess(): Fake {
         if (input.args.includes("proxy") && input.args.includes("status")) {
           if (state.hideSessionOnReload && state.runs.some((run) => run.includes("reload")))
             return { code: 0, signal: null, stdout: "[]", stderr: "" };
+          if (!sessionActive) return { code: 0, signal: null, stdout: "[]", stderr: "" };
           const record = {
             id: "abc12",
             uuid: "session-1",
@@ -150,6 +153,7 @@ function fakeProcess(): Fake {
             stderr: "banner must not be parsed",
           };
         }
+        if (input.args.includes("proxy") && input.args.includes("stop")) sessionActive = false;
         if (args.includes("proxy env"))
           return {
             code: 0,

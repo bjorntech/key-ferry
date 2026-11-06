@@ -37,8 +37,17 @@ export interface ManagedEnvironmentState {
   readonly injected: Readonly<Record<string, string>>;
 }
 
-function preserveDisabled(name: string, server: Mcp.ServerConfig, state: ProtectionState): boolean {
-  return state.explicitlyDisabled?.has(name) ?? server.disabled === true;
+function preserveDisabled(
+  name: string,
+  _server: Mcp.ServerConfig,
+  state: ProtectionState,
+): boolean {
+  // `server.disabled` may be the fail-closed mutation from an earlier
+  // reconciliation. Only the snapshot captured before Key Ferry touched the
+  // editor represents an explicit user disablement.
+  return state.explicitlyDisabled === undefined
+    ? _server.disabled === true
+    : state.explicitlyDisabled.has(name);
 }
 
 function disableConfig(config: Types.DeepMutable<Mcp.ServerConfig>): void {

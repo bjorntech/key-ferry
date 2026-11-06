@@ -240,7 +240,16 @@ export interface OwnershipVerifier {
   readonly command?: (pid: number) => Promise<readonly string[] | undefined>;
   /** The configured executable/prefix used to launch proxy start. */
   readonly expectedCommand?: readonly string[];
-  readonly status?: () => Promise<readonly { readonly uuid: string; readonly endedAt?: string }[]>;
+  readonly status?: () => Promise<
+    readonly {
+      readonly uuid: string;
+      readonly endedAt?: string;
+      readonly ownerPid?: number;
+      readonly cwd?: string;
+      /** Explicit Varlock metadata, when supported by the installed CLI. */
+      readonly keyFerryMarker?: string;
+    }[]
+  >;
   readonly stop: (record: BrokerOwnershipRecord) => Promise<void>;
 }
 export async function reapOwnershipRecords(
@@ -273,7 +282,13 @@ async function reapOwnershipRecordsOnce(
   // verifiers. The production reaper always supplies status and therefore never
   // relies on starter liveness to decide whether a daemon is owned.
   if (!verifier.status) return reapLegacyRecords(records, verifier, ops);
-  let sessions: readonly { uuid: string; endedAt?: string }[];
+  let sessions: readonly {
+    uuid: string;
+    endedAt?: string;
+    ownerPid?: number;
+    cwd?: string;
+    keyFerryMarker?: string;
+  }[];
   try {
     sessions = await verifier.status();
   } catch {
@@ -287,7 +302,38 @@ async function reapOwnershipRecordsOnce(
       );
     return { reaped: 0, skipped: records.length };
   }
-  return reapActiveRecords(records, sessions, verifier, ops);
+  const result = await reapActiveRecords(records, sessions, verifier, ops);
+  // Varlock 1.23 does not expose a reliable ownership marker in its normal
+  // status payload.  Only a future/compatible payload carrying the explicit
+  // marker is actionable here; cwd or PPID alone is deliberately ambiguous.
+  const recorded = new Set(records.map((record) => record.sessionUuid));
+  for (const session of sessions) {
+    if (
+      session.endedAt ||
+      session.keyFerryMarker !== "key-ferry" ||
+      recorded.has(session.uuid) ||
+      session.ownerPid === undefined ||
+      session.cwd === undefined ||
+      !verifier.isAlive ||
+      (await verifier.isAlive(session.ownerPid))
+    )
+      continue;
+    try {
+      await verifier.stop({
+        version: 2,
+        brokerKeyHash: "f".repeat(64),
+        sessionUuid: session.uuid,
+        starterPid: session.ownerPid,
+        cwd: session.cwd,
+        created: new Date().toISOString(),
+      });
+      if (await sessionGone(session.uuid, verifier)) result.reaped++;
+      else result.skipped++;
+    } catch {
+      result.skipped++;
+    }
+  }
+  return result;
 }
 async function reapLegacyRecords(
   records: BrokerOwnershipRecord[],
@@ -319,14 +365,21 @@ async function legacyRecordIsStale(
 }
 async function reapActiveRecords(
   records: BrokerOwnershipRecord[],
-  sessions: readonly { uuid: string; endedAt?: string }[],
+  sessions: readonly {
+    uuid: string;
+    endedAt?: string;
+    ownerPid?: number;
+    cwd?: string;
+    keyFerryMarker?: string;
+  }[],
   verifier: OwnershipVerifier,
   ops: OwnershipFileOps,
 ) {
   let reaped = 0,
     skipped = 0;
   for (const record of records) {
-    if (!sessions.some((s) => s.uuid === record.sessionUuid && !s.endedAt)) {
+    const active = sessions.find((s) => s.uuid === record.sessionUuid && !s.endedAt);
+    if (!active) {
       await removeOwnershipRecord(record.brokerKeyHash, ops);
       lifecycleLoggers.forEach((l) =>
         l({
@@ -338,8 +391,19 @@ async function reapActiveRecords(
       reaped++;
       continue;
     }
+    // A live starter owns the session.  In particular, do not mistake a
+    // daemonized proxy for an orphan merely because the starter command has
+    // already returned; the identity check also protects against PID reuse.
+    if (await starterStillOwned(record, verifier)) {
+      skipped++;
+      continue;
+    }
     try {
       await verifier.stop(record);
+      if (!(await sessionGone(record.sessionUuid, verifier))) {
+        skipped++;
+        continue;
+      }
       await removeOwnershipRecord(record.brokerKeyHash, ops);
       lifecycleLoggers.forEach((l) =>
         l({
@@ -355,6 +419,21 @@ async function reapActiveRecords(
   }
   return { reaped, skipped };
 }
+
+const REAP_VERIFY_ATTEMPTS = 3;
+const REAP_VERIFY_DELAY_MS = 50;
+
+async function sessionGone(sessionUuid: string, verifier: OwnershipVerifier): Promise<boolean> {
+  if (!verifier.status) return false;
+  for (let attempt = 0; attempt < REAP_VERIFY_ATTEMPTS; attempt++) {
+    const sessions = await verifier.status().catch(() => undefined);
+    if (sessions && !sessions.some((session) => session.uuid === sessionUuid && !session.endedAt))
+      return true;
+    if (attempt + 1 < REAP_VERIFY_ATTEMPTS)
+      await new Promise((resolve) => setTimeout(resolve, REAP_VERIFY_DELAY_MS));
+  }
+  return false;
+}
 export function reapStaleOwnershipRecords(
   command: string | readonly string[] = "varlock",
   ops: OwnershipFileOps = files,
@@ -369,13 +448,19 @@ export function reapStaleOwnershipRecords(
         timeout: 2_000,
       });
       const parsed = JSON.parse(result.stdout);
-      return Array.isArray(parsed) ? parsed : (parsed.sessions ?? []);
+      const sessions = Array.isArray(parsed) ? parsed : (parsed.sessions ?? []);
+      return sessions.map((session: any) => ({
+        ...session,
+        // Varlock 1.23 includes the proxy environment in status JSON.  Do
+        // not infer ownership from cwd/PPID; only this explicit marker is
+        // accepted for the recordless safety pass.
+        keyFerryMarker: session.env?.KEY_FERRY_PROXY_MARKER,
+      }));
     },
     stop: async (record) => {
       await exec(executable, ["proxy", "stop", "--session", record.sessionUuid], {
         timeout: 2_000,
       });
-      if (await starterStillOwned(record, verifier)) terminateStarter(record.starterPid);
     },
     isAlive: async (pid) => {
       try {
@@ -470,10 +555,4 @@ export function sameStarterIdentity(
     executableMatches,
     JSON.stringify(startPrefix) === JSON.stringify(["proxy", "start"]),
   ].every(Boolean);
-}
-
-function terminateStarter(pid: number): void {
-  try {
-    process.kill(pid, "SIGTERM");
-  } catch {}
 }

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -115,11 +115,13 @@ function managerFixture(
   mode: "strict" | "permissive",
   envFailure = false,
   command = "varlock",
+  failure: "none" | "spawn" | "wait" = "none",
 ) {
   const calls: string[][] = [];
   const lifecycle: unknown[] = [];
   let failStop = false;
   let certPath = "";
+  let sessionActive = true;
   const session = {
     id: "startup-session",
     uuid: "startup-session",
@@ -137,18 +139,22 @@ function managerFixture(
   };
   const service: ProcessService = {
     spawn: (input) =>
-      Effect.tryPromise(async () => {
-        const certDir = input.args[input.args.indexOf("--cert-dir") + 1]!;
-        certPath = join(certDir, "ca-cert.pem");
-        await mkdir(certDir, { recursive: true, mode: 0o700 });
-        await writeFile(certPath, "fixture", { mode: 0o600 });
-        return {
-          pid: 5151,
-          completion: Effect.never,
-          health: Effect.succeed({ pid: 5151, running: true }),
-          stop: Effect.void,
-        } satisfies ManagedProcess;
-      }),
+      failure === "spawn"
+        ? Effect.fail(
+            new ProcessError({ phase: "spawn", code: "spawn-failed", message: "fixture" }),
+          )
+        : Effect.tryPromise(async () => {
+            const certDir = input.args[input.args.indexOf("--cert-dir") + 1]!;
+            certPath = join(certDir, "ca-cert.pem");
+            await mkdir(certDir, { recursive: true, mode: 0o700 });
+            await writeFile(certPath, "fixture", { mode: 0o600 });
+            return {
+              pid: 5151,
+              completion: Effect.never,
+              health: Effect.succeed({ pid: 5151, running: true }),
+              stop: Effect.void,
+            } satisfies ManagedProcess;
+          }),
     run: (input) =>
       Effect.gen(function* () {
         calls.push([...input.args]);
@@ -157,10 +163,16 @@ function managerFixture(
             return yield* Effect.fail(
               new ProcessError({ phase: "exit", code: "non-zero", message: "private stop detail" }),
             );
+          sessionActive = false;
           return { code: 0, signal: null, stdout: "", stderr: "" };
         }
         if (input.args.includes("status"))
-          return { code: 0, signal: null, stdout: JSON.stringify([session]), stderr: "" };
+          return {
+            code: 0,
+            signal: null,
+            stdout: JSON.stringify(sessionActive && failure !== "wait" ? [session] : []),
+            stderr: "",
+          };
         if (input.args.includes("env") && envFailure)
           return yield* Effect.fail(
             new ProcessError({ phase: "exit", code: "non-zero", message: "private env detail" }),
@@ -184,12 +196,20 @@ function managerFixture(
         command: [command],
         environmentKeys: ["OPENAI_API_KEY"],
         ownershipDirectory: directory,
+        startupTimeoutMs: 100,
+        pollIntervalMs: 10,
         lifecycleLogger: (event) => lifecycle.push(event),
       },
     },
     Layer.succeed(Process, Process.of(service)),
   );
-  return { calls, lifecycle, setFailStop: () => (failStop = true), layer };
+  return {
+    calls,
+    lifecycle,
+    certPath: () => certPath,
+    setFailStop: () => (failStop = true),
+    layer,
+  };
 }
 
 async function withFixture<A>(
@@ -297,6 +317,41 @@ test("environment read failure after capture uses the same cleanup", async () =>
     ["startup-session"],
   );
   assert.deepEqual(await readOwnershipRecords(ownershipFileOps(directory)), []);
+  await rm(root, { recursive: true, force: true });
+});
+
+test("spawn failure removes the acquired certificate directory", async () => {
+  const root = await mkdtemp(join(tmpdir(), "key-ferry-spawn-cleanup-"));
+  const directory = ownershipDirectory(root);
+  const fixture = managerFixture(directory, "strict", false, "varlock", "spawn");
+  await assert.rejects(withFixture(fixture.layer, (m) => m.ensureStarted));
+  assert.equal(fixture.certPath(), "");
+  await rm(root, { recursive: true, force: true });
+});
+
+test("session-wait failure removes the acquired certificate directory", async () => {
+  const root = await mkdtemp(join(tmpdir(), "key-ferry-wait-cleanup-"));
+  const directory = ownershipDirectory(root);
+  const fixture = managerFixture(directory, "strict", false, "varlock", "wait");
+  await assert.rejects(withFixture(fixture.layer, (m) => m.ensureStarted));
+  await assert.rejects(stat(fixture.certPath()));
+  await rm(root, { recursive: true, force: true });
+});
+
+test("a certificate directory remains while an active session still references it", async () => {
+  const root = await mkdtemp(join(tmpdir(), "key-ferry-active-cert-"));
+  const directory = ownershipDirectory(root);
+  const fixture = managerFixture(directory, "strict");
+  fixture.setFailStop();
+  await withFixture(fixture.layer, (m) =>
+    m.ensureStarted.pipe(
+      Effect.catch(() =>
+        Effect.promise(async () => {
+          await stat(fixture.certPath());
+        }),
+      ),
+    ),
+  );
   await rm(root, { recursive: true, force: true });
 });
 

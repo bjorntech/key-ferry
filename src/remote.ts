@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { isIP } from "node:net";
 import { Effect, Scope } from "effect";
@@ -16,6 +17,17 @@ export interface RemoteRelayConfig {
   readonly connectTimeoutMs?: number;
   readonly idleTimeoutMs?: number;
   readonly maxConnections?: number;
+  /** Secret-free identity of the broker wiring this relay is bound to. */
+  readonly binding?: RemoteRelayBinding;
+}
+
+export interface RemoteRelayBinding {
+  readonly brokerSessionId: string;
+  readonly generation: number;
+  readonly proxyUrl: string;
+  readonly proxyPort: number;
+  readonly caHash: string;
+  readonly tokenFingerprint: string;
 }
 
 export interface RemoteRelayHealth {
@@ -30,6 +42,7 @@ export interface RemoteRelayHandle {
   readonly downstreamToken: string;
   readonly health: Effect.Effect<RemoteRelayHealth, unknown>;
   readonly stop: Effect.Effect<void, unknown>;
+  readonly binding?: RemoteRelayBinding;
 }
 
 export type RemoteRelayFactory = (
@@ -207,6 +220,30 @@ function readProxyAndCa(environment: Readonly<Record<string, string>>): {
   return { proxyUrl, caPem };
 }
 
+const digest = (value: string) => createHash("sha256").update(value).digest("hex");
+
+const bindingFor = (
+  wiring: { proxyUrl: string; caPem: string },
+  placeholders: Readonly<Record<string, string>>,
+  generation: number,
+  brokerSessionId?: string,
+): RemoteRelayBinding => {
+  const proxy = new URL(wiring.proxyUrl);
+  return {
+    brokerSessionId: brokerSessionId ?? "unknown",
+    generation,
+    proxyUrl: wiring.proxyUrl,
+    proxyPort: Number(proxy.port || (proxy.protocol === "https:" ? 443 : 80)),
+    caHash: digest(wiring.caPem),
+    tokenFingerprint: digest(
+      Object.entries(placeholders)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([name, value]) => `${name.toLowerCase()}=${value}`)
+        .join("\n"),
+    ),
+  };
+};
+
 export interface RemoteRelayCoordinator {
   readonly handles: ReadonlyMap<string, RemoteRelayHandle>;
   readonly diagnostics: readonly RemoteDiagnostic[];
@@ -215,6 +252,7 @@ export interface RemoteRelayCoordinator {
     mappings: Readonly<Record<string, ServerProtection>>,
     environment: Readonly<Record<string, string>>,
     generation: number,
+    brokerSessionId?: string,
   ) => Effect.Effect<void, never, Scope.Scope>;
   readonly health: Effect.Effect<boolean>;
   readonly stopAll: Effect.Effect<void>;
@@ -225,7 +263,10 @@ export function makeRemoteRelayCoordinator(
   factory: RemoteRelayFactory | undefined,
   allowPrivateNetwork = false,
 ): RemoteRelayCoordinator {
-  const active = new Map<string, { handle: RemoteRelayHandle; generation: number }>();
+  const active = new Map<
+    string,
+    { handle: RemoteRelayHandle; generation: number; binding: RemoteRelayBinding }
+  >();
   let currentDiagnostics: readonly RemoteDiagnostic[] = [];
   const stop = (handle: RemoteRelayHandle) => handle.stop.pipe(Effect.catch(() => Effect.void));
 
@@ -234,6 +275,7 @@ export function makeRemoteRelayCoordinator(
     mappings: Readonly<Record<string, ServerProtection>>,
     environment: Readonly<Record<string, string>>,
     generation: number,
+    brokerSessionId?: string,
   ) =>
     Effect.gen(function* () {
       const nextDiagnostics: RemoteDiagnostic[] = [];
@@ -322,7 +364,8 @@ export function makeRemoteRelayCoordinator(
           );
           continue;
         }
-        if (old && old.generation === generation) continue;
+        const binding = bindingFor(wiring, placeholders, generation, brokerSessionId);
+        if (old && sameBinding(old.binding, binding)) continue;
         if (old) {
           yield* stop(old.handle);
           active.delete(name);
@@ -333,11 +376,12 @@ export function makeRemoteRelayCoordinator(
           managerCaPem: wiring.caPem,
           placeholderHeaders: placeholders,
           oauth: false,
+          binding,
         }).pipe(
           Effect.map((handle) => ({ ok: true as const, handle })),
           Effect.catch(() => Effect.succeed({ ok: false as const })),
         );
-        if (started.ok) active.set(name, { handle: started.handle, generation });
+        if (started.ok) active.set(name, { handle: started.handle, generation, binding });
         else
           nextDiagnostics.push(
             diagnostic(name, "remote_relay_failed", "remote relay could not start"),
@@ -373,4 +417,15 @@ export function makeRemoteRelayCoordinator(
       }).pipe(Effect.tap(() => Effect.sync(() => active.clear()))),
     ),
   };
+}
+
+function sameBinding(a: RemoteRelayBinding, b: RemoteRelayBinding): boolean {
+  return (
+    a.brokerSessionId === b.brokerSessionId &&
+    a.generation === b.generation &&
+    a.proxyUrl === b.proxyUrl &&
+    a.proxyPort === b.proxyPort &&
+    a.caHash === b.caHash &&
+    a.tokenFingerprint === b.tokenFingerprint
+  );
 }
