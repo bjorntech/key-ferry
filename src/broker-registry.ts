@@ -35,6 +35,8 @@ export interface BrokerLease extends ProjectKeyFerryManagerService {
 
 export interface BrokerRegistryOptions {
   readonly canonicalize?: (directory: string) => Effect.Effect<string, unknown>;
+  /** Supplies the schema fingerprint; the default retains the real filesystem implementation. */
+  readonly schemaHash?: (directory: string) => Effect.Effect<string, unknown>;
   readonly maxEntries?: number;
   readonly now?: () => number;
 }
@@ -162,39 +164,42 @@ async function contentHash(directory: string): Promise<string> {
   return hash.digest("hex");
 }
 
-async function keyFor(
+function keyFor(
   directory: string,
   options: ProjectKeyFerryManagerOptions,
-): Promise<{ key: string; contextKey: string }> {
-  const adapter = validateOptions(options);
-  const keys = [
-    ...new Set([
-      ...(adapter.environmentKeys as string[]),
-      ...Object.keys(globalThis.process.env).filter((key) => /^OP_/.test(key)),
-    ]),
-  ].sort();
-  const valuesHash = createHash("sha256");
-  for (const key of keys) valuesHash.update(`${key}\0${globalThis.process.env[key] ?? ""}\0`);
-  const context = {
-    projectDirectory: directory,
-    owner: options.owner,
-    sessionID: options.sessionID,
-    command: adapter.command,
-    environmentKeys: [...new Set(adapter.environmentKeys as string[])].sort(),
-    startupTimeoutMs: adapter.startupTimeoutMs,
-    commandTimeoutMs: adapter.commandTimeoutMs,
-    reloadTimeoutMs: adapter.reloadTimeoutMs,
-    pollIntervalMs: adapter.pollIntervalMs,
-    requireStrictEgress: adapter.requireStrictEgress,
-  };
-  return {
-    contextKey: stable(context),
-    key: stable({
-      ...context,
-      environmentValuesHash: valuesHash.digest("hex"),
-      schemaHash: await contentHash(directory),
-    }),
-  };
+  schemaHash: (directory: string) => Effect.Effect<string, unknown>,
+): Effect.Effect<{ key: string; contextKey: string }, unknown> {
+  return Effect.gen(function* () {
+    const adapter = validateOptions(options);
+    const keys = [
+      ...new Set([
+        ...(adapter.environmentKeys as string[]),
+        ...Object.keys(globalThis.process.env).filter((key) => /^OP_/.test(key)),
+      ]),
+    ].sort();
+    const valuesHash = createHash("sha256");
+    for (const key of keys) valuesHash.update(`${key}\0${globalThis.process.env[key] ?? ""}\0`);
+    const context = {
+      projectDirectory: directory,
+      owner: options.owner,
+      sessionID: options.sessionID,
+      command: adapter.command,
+      environmentKeys: [...new Set(adapter.environmentKeys as string[])].sort(),
+      startupTimeoutMs: adapter.startupTimeoutMs,
+      commandTimeoutMs: adapter.commandTimeoutMs,
+      reloadTimeoutMs: adapter.reloadTimeoutMs,
+      pollIntervalMs: adapter.pollIntervalMs,
+      requireStrictEgress: adapter.requireStrictEgress,
+    };
+    return {
+      contextKey: stable(context),
+      key: stable({
+        ...context,
+        environmentValuesHash: valuesHash.digest("hex"),
+        schemaHash: yield* schemaHash(directory),
+      }),
+    };
+  });
 }
 
 function readinessChanged(entry: Entry, revision: number, ready: Entry["ready"]): boolean {
@@ -236,6 +241,9 @@ export function makeBrokerRegistry(configuration: BrokerRegistryOptions = {}) {
   const canonicalize =
     configuration.canonicalize ??
     ((directory: string) => Effect.tryPromise(() => realpath(directory)));
+  const schemaHash =
+    configuration.schemaHash ??
+    ((directory: string) => Effect.tryPromise(() => contentHash(directory)));
   const maxEntries = configuration.maxEntries ?? 128;
   const now = configuration.now ?? (() => Date.now());
 
@@ -379,7 +387,7 @@ export function makeBrokerRegistry(configuration: BrokerRegistryOptions = {}) {
     directory: string,
   ): Effect.Effect<Entry> =>
     Effect.gen(function* () {
-      const identity = yield* Effect.promise(() => keyFor(directory, options));
+      const identity = yield* keyFor(directory, options, schemaHash).pipe(Effect.orDie);
       const key = identity.key;
       const factoryMap = factories.get(factory as object) ?? new Map<string, Entry>();
       factories.set(factory as object, factoryMap);
@@ -551,7 +559,7 @@ export function makeBrokerRegistry(configuration: BrokerRegistryOptions = {}) {
         Effect.gen(function* () {
           const entry = factories
             .get(factory as object)
-            ?.get((yield* Effect.promise(() => keyFor(directory, options))).key);
+            ?.get((yield* keyFor(directory, options, schemaHash)).key);
           if (entry?.retryBatch) return entry.retryBatch;
           if (entry) {
             const initial = yield* retryEntry(entry);
@@ -650,7 +658,7 @@ export function makeBrokerRegistry(configuration: BrokerRegistryOptions = {}) {
       const directory = yield* canonicalize(options.projectDirectory);
       const entry = factories
         .get(factory as object)
-        ?.get((yield* Effect.promise(() => keyFor(directory, options))).key);
+        ?.get((yield* keyFor(directory, options, schemaHash)).key);
       if (!entry?.failure || (entry.nextRetryAt && now() < Date.parse(entry.nextRetryAt)))
         return undefined;
       entry.retryBatch = undefined;
