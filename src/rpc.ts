@@ -25,6 +25,7 @@ const managerPhase = Schema.Literals([
   "degraded",
   "failed",
   "stopping",
+  "idle",
 ] as const);
 const diagnostic = Schema.Struct({
   code: Schema.String,
@@ -37,6 +38,7 @@ const scopeStatus = Schema.Struct({
   phase: managerPhase,
   generation: Schema.Number,
   pid: Schema.optional(Schema.Number),
+  idleUntil: Schema.optional(Schema.String),
   lastRefreshAt: Schema.optional(Schema.String),
   error: Schema.optional(statusError),
   lastFailureAt: Schema.optional(Schema.String),
@@ -50,6 +52,7 @@ export const SafeStatusSchema = Schema.Struct({
   projectDirectory: Schema.String,
   generation: Schema.Number,
   pid: Schema.optional(Schema.Number),
+  idleUntil: Schema.optional(Schema.String),
   endpoint: Schema.optional(Schema.String),
   lastRefreshAt: Schema.optional(Schema.String),
   lastFailureAt: Schema.optional(Schema.String),
@@ -66,15 +69,19 @@ const selector = Schema.Struct({
 });
 const Empty = Schema.Struct({});
 
+const varlockErrorCodes = new Set<VarlockError["code"]>([
+  "invalid_config",
+  "ownership_unavailable",
+  "unavailable",
+  "start_failed",
+  "refresh_failed",
+  "not_ready",
+  "disposed",
+  "protocol_error",
+  "timeout",
+]);
 const isVarlockErrorCode = (value: unknown): value is VarlockError["code"] =>
-  value === "invalid_config" ||
-  value === "unavailable" ||
-  value === "start_failed" ||
-  value === "refresh_failed" ||
-  value === "not_ready" ||
-  value === "disposed" ||
-  value === "protocol_error" ||
-  value === "timeout";
+  typeof value === "string" && varlockErrorCodes.has(value as VarlockError["code"]);
 
 export const KeyFerryRpc = Rpc.define({
   id: "key-ferry",
@@ -111,26 +118,18 @@ export const KeyFerryRpc = Rpc.define({
   events: {},
 });
 
-const publicMessage = (error: VarlockError) => {
-  switch (error.code) {
-    case "invalid_config":
-      return "Varlock configuration is invalid";
-    case "start_failed":
-      return "Varlock could not start";
-    case "refresh_failed":
-      return "Varlock refresh failed";
-    case "timeout":
-      return "Varlock operation timed out";
-    case "not_ready":
-      return "Varlock is not ready";
-    case "disposed":
-      return "Varlock manager is stopped";
-    case "protocol_error":
-      return "Varlock returned an invalid response";
-    default:
-      return "Varlock is unavailable";
-  }
+const publicMessages: Partial<Record<VarlockError["code"], string>> = {
+  invalid_config: "Varlock configuration is invalid",
+  ownership_unavailable: "Key Ferry could not secure its private runtime directory; see doctor.",
+  start_failed: "Varlock could not start",
+  refresh_failed: "Varlock refresh failed",
+  timeout: "Varlock operation timed out",
+  not_ready: "Varlock is not ready",
+  disposed: "Varlock manager is stopped",
+  protocol_error: "Varlock returned an invalid response",
 };
+const publicMessage = (error: VarlockError) =>
+  publicMessages[error.code] ?? "Varlock is unavailable";
 
 /** Rebuild a safe status without trusting an adapter error message. */
 export function sanitizeStatus(status: SafeStatus): SafeStatus {
@@ -154,6 +153,7 @@ function sanitizeLegacyFields(status: SafeStatus): Partial<SafeStatus> {
     ...optionalField("lastRefreshAt", status.lastRefreshAt),
     ...optionalField("lastFailureAt", status.lastFailureAt),
     ...optionalField("nextRetryAt", status.nextRetryAt),
+    ...optionalField("idleUntil", status.idleUntil),
     ...optionalField("error", status.error === undefined ? undefined : sanitizeError(status.error)),
   };
 }
@@ -206,6 +206,7 @@ function sanitizeScopeStatus(status: SafeScopeStatus): SafeScopeStatus {
     ...optionalField("lastRefreshAt", status.lastRefreshAt),
     ...optionalField("lastFailureAt", status.lastFailureAt),
     ...optionalField("nextRetryAt", status.nextRetryAt),
+    ...optionalField("idleUntil", status.idleUntil),
     ...optionalField("error", status.error === undefined ? undefined : sanitizeError(status.error)),
     ...optionalField("diagnostics", status.diagnostics?.map(sanitizeDiagnostic)),
     ...optionalField("activation", status.activation),

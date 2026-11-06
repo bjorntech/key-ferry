@@ -28,6 +28,7 @@ function options(overrides: Partial<ProjectKeyFerryManagerOptions> = {}) {
       reloadTimeoutMs: 100,
       pollIntervalMs: 10,
       requireStrictEgress: true,
+      idleTimeoutMs: 0,
       ...(overrides.adapter ?? {}),
     },
   } satisfies ProjectKeyFerryManagerOptions;

@@ -277,7 +277,9 @@ export function makeScopedController(options: ScopedControllerOptions) {
                 if (runtime.active && next.generation >= runtime.observedGeneration)
                   yield* reconcile(runtime, next, environment, epoch);
               })
-            : clear(runtime, next.phase === "failed" ? "failed" : "starting", next),
+            : next.phase === "idle"
+              ? Effect.void
+              : clear(runtime, next.phase === "failed" ? "failed" : "starting", next),
       );
     }).pipe(
       Effect.catch((error) =>
@@ -312,7 +314,7 @@ export function makeScopedController(options: ScopedControllerOptions) {
         });
 
   const heartbeatStatus = (runtime: Runtime, lease: BrokerLease, current: SafeStatus) =>
-    current.phase !== "ready"
+    current.phase !== "ready" && current.phase !== "idle"
       ? current.phase === "failed"
         ? options.registry.retryIfDue(options.factory, runtime.group.manager).pipe(
             Effect.flatMap((result) =>

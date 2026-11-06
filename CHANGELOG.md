@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.1.14 — 2026-11-06
+
+### Fixed
+
+- Keep ownership records when proxy shutdown fails so the next startup reaper can
+  retry cleanup of the same session.
+
+- Preserve host SIGINT/SIGTERM behavior while performing bounded broker cleanup,
+  unregister lifecycle loggers on shutdown, and expose idle status consistently.
+
+- Keep Varlock brokers alive for a ten-minute idle grace period so returning to
+  a project reuses the authenticated proxy; set `idleTimeoutMs` to `0` for
+  immediate teardown. Idle brokers are stopped during shutdown and when their
+  configuration key changes.
+- Stop owned Varlock sessions through `varlock proxy stop` before reaping the
+  spawned process group.
+
 ## 0.1.13 — 2026-11-06
 
 ### Fixed

@@ -36,6 +36,11 @@ Direct provider/API transport protection is not included.
 - Varlock CLI 1.23.0 installed separately as `varlock`
 - An installed Varlock CLI and a configured Varlock environment/schema with the
   secrets and proxy rules your MCP servers need
+- A private, writable runtime directory for ownership records. By default this
+  is `tmpdir()/key-ferry-<uid>`; `adapter.ownershipDirectory` may be used to
+  inject another private, writable directory. If it cannot be secured, startup
+  fails closed with the `ownership_unavailable` diagnostic (also shown by
+  `key-ferry.doctor`).
 - Configure secret sources and authentication following the
   [Varlock documentation](https://varlock.dev/)
 
@@ -193,6 +198,21 @@ filters requested keys. Mark each remote upstream host with `@proxy(domain="..."
 `@proxyConfig={egress="strict"}`. Configure any secret source through Varlock;
 Key Ferry does not install Varlock, create its schema, or configure provider
 authentication. Never commit a real secret.
+
+Broker processes remain available for `idleTimeoutMs` milliseconds after the
+last lease is released (default: `600000`, or ten minutes). This reuses the
+authenticated Varlock proxy when returning to a project. Set
+`idleTimeoutMs: 0` for immediate teardown; idle brokers are always stopped on
+host shutdown or when their schema/configuration identity changes. This is a
+security/performance trade-off: resolved secrets remain in the proxy process's
+memory for up to the idle timeout after leaving a project. On startup Key Ferry
+also reaps orphaned, identity-checked proxy records left by an earlier process.
+If stopping a proxy fails during shutdown, Key Ferry keeps its ownership record and
+defers cleanup to the next startup, whose reaper retries the same session UUID.
+On SIGINT or SIGTERM it performs bounded cleanup (up to three seconds), removes
+its signal listener, and re-raises the signal when it is the only listener so
+the host's normal termination semantics are preserved; host-owned signal
+listeners remain in control.
 
 ## TUI commands
 

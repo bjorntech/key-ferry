@@ -1,4 +1,5 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { promisify } from "node:util";
 import { Context, Data, Duration, Effect, Layer } from "effect";
 
 export type ProcessPhase = "spawn" | "running" | "timeout" | "capture-limit" | "exit";
@@ -53,6 +54,8 @@ export interface ManagedProcess {
 export interface ProcessService {
   run(input: RunInput): Effect.Effect<RunResult, ProcessError>;
   spawn(input: SpawnInput): Effect.Effect<ManagedProcess, ProcessError, ScopeRequirement>;
+  /** Best-effort identity metadata for a spawned leader. */
+  readonly startTime?: (pid: number) => Effect.Effect<string | undefined>;
 }
 
 // Kept as a type alias so consumers do not need to know the implementation's
@@ -417,7 +420,21 @@ const run = (input: RunInput): Effect.Effect<RunResult, ProcessError> => {
 };
 
 const makeProcessLive = (spawnProcess: typeof spawn = spawn) =>
-  Layer.succeed(Process, Process.of({ run, spawn: (input) => spawnRaw(input, spawnProcess) }));
+  Layer.succeed(
+    Process,
+    Process.of({
+      run,
+      spawn: (input) => spawnRaw(input, spawnProcess),
+      startTime: (pid) =>
+        Effect.tryPromise({
+          try: async () => {
+            const result = await promisify(execFile)("ps", ["-o", "lstart=", "-p", String(pid)]);
+            return result.stdout.trim();
+          },
+          catch: () => new Error("start time unavailable"),
+        }).pipe(Effect.catch(() => Effect.succeed(undefined))),
+    }),
+  );
 
 export const ProcessLive = makeProcessLive();
 
