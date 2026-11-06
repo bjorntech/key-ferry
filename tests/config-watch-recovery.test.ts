@@ -43,18 +43,16 @@ type WatchEvent = { type: "load"; tick: number } | { type: "reload"; ok: boolean
 const takeWatchEvent = (events: Queue.Queue<WatchEvent>, label: string) =>
   Effect.raceFirst(
     Queue.take(events),
-    // This is only a real-time failure guard; TestClock intentionally cannot advance it.
-    Effect.promise(
-      () =>
-        new Promise<never>((_, reject) => {
-          const timer = setTimeout(
-            () => reject(new Error(`timed out waiting for ${label}`)),
-            30_000,
-          );
-          // The timer is only a safety guard and must not keep the test process alive.
-          timer.unref();
-        }),
-    ),
+    // This is only a real-time failure guard, never used for ordering; TestClock intentionally cannot advance it.
+    Effect.callback<never, Error>((resume) => {
+      const timer = setTimeout(
+        () => resume(Effect.fail(new Error(`timed out waiting for ${label}`))),
+        30_000,
+      );
+      // The timer is only a safety guard and must not keep the test process alive.
+      timer.unref();
+      return Effect.sync(() => clearTimeout(timer));
+    }),
   );
 
 const inMemorySchemaHash = () => Effect.succeed("test-schema");
