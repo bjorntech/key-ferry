@@ -159,18 +159,22 @@ test("config watch backs off persistent apply failures and retries a new fingerp
         // retryDelayMs(7) cap is 300s, so A's real deadline is 616s.
         const retryDeadline = lastAFailureAt + retryDelayMs(7);
         bApplied = yield* Deferred.make<void>();
-        bTarget = beforeChange + 3;
+        bTarget = beforeChange + 1;
         fingerprint = "B";
         failApply = false;
         for (let i = 0; i < 100 && applies < bTarget; i++) {
           yield* tick(1);
         }
         yield* Deferred.await(bApplied);
+        const firstBApplyAt = yield* Clock.currentTimeMillis;
+        assert.ok(firstBApplyAt < retryDeadline);
+        for (let i = 0; i < 20 && applies < beforeChange + 3; i++) {
+          yield* Effect.yieldNow;
+        }
         const afterChange = applies;
         // A successful B replacement invokes reload from project acquisition,
         // observer reconciliation, and replaceProject's final reload.
         assert.equal(afterChange, beforeChange + 3);
-        assert.ok((yield* Clock.currentTimeMillis) < retryDeadline);
         assert.deepEqual({ ...controller.configuration().project?.servers.selected }, { B: "B" });
         yield* Fiber.interrupt(watch);
         yield* controller.dispose;
