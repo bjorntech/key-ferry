@@ -1,6 +1,6 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { Clock, Deferred, Effect, Exit, Fiber, Layer, Scope } from "effect";
+import { Clock, Deferred, Effect, Exit, Fiber, Layer, Option, Queue, Scope } from "effect";
 import { TestClock } from "effect/testing";
 import { makeBrokerRegistry, retryDelayMs } from "../src/broker-registry.js";
 import { ProjectKeyFerryManager, projectDirectory, VarlockError } from "../src/contracts.js";
@@ -50,8 +50,9 @@ const tick = (seconds: number) =>
 test("config watch retains a sanitized load failure and continues after a valid change", async () => {
   const directory = projectDirectory("/project");
   const configuration = await configurationFor(directory, "TOKEN");
+  const nextConfiguration = await configurationFor(directory, "NEXT_TOKEN");
   let loads = 0;
-  let nextToken = "TOKEN";
+  let nextConfigurationReady = false;
   const scope = await Effect.runPromise(Scope.make());
   const controller = makeScopedController({
     configuration,
@@ -67,7 +68,7 @@ test("config watch retains a sanitized load failure and continues after a valid 
     const watch = yield* controller.watch(async () => {
       loads++;
       if (loads === 1) throw new Error("raw secret should not escape");
-      return configurationFor(directory, nextToken);
+      return nextConfigurationReady ? nextConfiguration : configuration;
     });
     yield* Effect.yieldNow;
     assert.deepEqual(
@@ -79,7 +80,7 @@ test("config watch retains a sanitized load failure and continues after a valid 
     assert.ok(loads > 1);
     assert.equal(JSON.stringify(failed).includes("raw secret"), false);
     assert.ok(failed.lastFailureAt ?? failed.scopes?.some((scope) => scope.lastFailureAt));
-    nextToken = "NEXT_TOKEN";
+    nextConfigurationReady = true;
     yield* tick(2);
     assert.deepEqual(
       { ...controller.configuration().project?.servers.selected },
@@ -101,12 +102,18 @@ test("config watch retains a sanitized load failure and continues after a valid 
 test("config watch backs off persistent apply failures and retries a new fingerprint promptly", async () => {
   const directory = projectDirectory("/project");
   const configuration = await configurationFor(directory, "TOKEN");
-  let fingerprint = "A";
+  const aConfiguration = await configurationFor(directory, "A");
+  const nextConfiguration = await configurationFor(directory, "B");
+  let fingerprint: "A" | "B" = "A";
   let loads = 0;
   let applies = 0;
   let failApply = true;
-  let bApplied: Deferred.Deferred<void> | undefined;
-  let bTarget: number | undefined;
+  type Event = { type: "load"; tick: number } | { type: "reload"; ok: boolean };
+  let events: Queue.Queue<Event> | undefined;
+  const signal = (event: Event) => {
+    if (events) Effect.runSync(Queue.offer(events, event));
+  };
+  const configurations = { A: aConfiguration, B: nextConfiguration };
   const scope = await Effect.runPromise(Scope.make());
   const controller = makeScopedController({
     configuration,
@@ -116,64 +123,70 @@ test("config watch backs off persistent apply failures and retries a new fingerp
     reload: () =>
       Effect.sync(() => {
         applies++;
-        return bTarget === applies && bApplied
-          ? Deferred.succeed(bApplied, undefined)
-          : Effect.void;
+        signal({ type: "reload", ok: !failApply });
       }).pipe(
-        Effect.flatMap((signal) => signal),
         Effect.flatMap(() => (failApply ? Effect.fail(new Error("apply failed")) : Effect.void)),
       ),
     watchIntervalMs: 1_000,
     startEmptyGlobal: false,
   });
   await Effect.runPromise(controller.start);
+  events = await Effect.runPromise(Queue.unbounded<Event>());
   const result = await Effect.runPromise(
     Effect.provide(
       Effect.gen(function* () {
+        const take = (label: string) =>
+          Effect.gen(function* () {
+            for (let i = 0; i < 1000; i++) {
+              const event = yield* Queue.poll(events!);
+              if (Option.isSome(event)) return event.value;
+              yield* Effect.yieldNow;
+              yield* Effect.promise(() => Promise.resolve());
+            }
+            return yield* Effect.fail(new Error(`timed out waiting for ${label}`));
+          });
+        const step = (seconds: number, reloads = 0) =>
+          Effect.gen(function* () {
+            yield* Effect.yieldNow;
+            yield* TestClock.adjust(`${seconds} seconds`);
+            let load = yield* take("load");
+            while (load.type === "reload") load = yield* take("load");
+            assert.equal(load.type, "load");
+            for (let i = 0; i < reloads; i++) {
+              let reload = yield* take("reload");
+              while (reload.type === "load") reload = yield* take("reload");
+              assert.equal(reload.type, "reload");
+            }
+          });
+        // start may finish its initial reconciliation on the next scheduler turn.
+        yield* Effect.yieldNow;
         const watch = yield* controller.watch(async () => {
           loads++;
-          return configurationFor(directory, fingerprint);
+          signal({ type: "load", tick: loads });
+          return configurations[fingerprint];
         });
-        let observedApplies = applies;
+        const retryTimes = [1, 6, 16, 36, 76, 156, 316];
+        let previous = 0;
         let lastAFailureAt = 0;
-        for (let i = 0; i < 500; i++) {
-          yield* tick(1);
-          if (applies !== observedApplies) {
-            lastAFailureAt = yield* Clock.currentTimeMillis;
-            observedApplies = applies;
-          }
+        for (const retryTime of retryTimes) {
+          yield* step(retryTime - previous, 2);
+          previous = retryTime;
+          lastAFailureAt = yield* Clock.currentTimeMillis;
         }
         const beforeChange = applies;
-        // The retry schedule is 1, 6, 16, 36, 76, 156, 316, then 616 seconds;
-        // each failed replacement invokes reload for rollback as well, plus the
-        // initial startup reload, so 15-17 reload calls cover this run.
-        assert.ok(
-          beforeChange >= 15 && beforeChange <= 17,
-          `applies=${beforeChange}, loads=${loads}`,
-        );
+        assert.ok(beforeChange >= 15 && beforeChange <= 17);
         assert.deepEqual(
           { ...controller.configuration().project?.servers.selected },
           { TOKEN: "TOKEN" },
         );
-        // The last observed A attempt is the seventh retry at 316s. Its
-        // retryDelayMs(7) cap is 300s, so A's real deadline is 616s.
+        // The seventh A failure is at 316s; its capped retry deadline is 616s.
         const retryDeadline = lastAFailureAt + retryDelayMs(7);
-        bApplied = yield* Deferred.make<void>();
-        bTarget = beforeChange + 1;
         fingerprint = "B";
         failApply = false;
-        for (let i = 0; i < 100 && applies < bTarget; i++) {
-          yield* tick(1);
-        }
-        yield* Deferred.await(bApplied);
+        yield* step(1, 3);
         const firstBApplyAt = yield* Clock.currentTimeMillis;
         assert.ok(firstBApplyAt < retryDeadline);
-        for (let i = 0; i < 20 && applies < beforeChange + 3; i++) {
-          yield* Effect.yieldNow;
-        }
         const afterChange = applies;
-        // A successful B replacement invokes reload from project acquisition,
-        // observer reconciliation, and replaceProject's final reload.
         assert.equal(afterChange, beforeChange + 3);
         assert.deepEqual({ ...controller.configuration().project?.servers.selected }, { B: "B" });
         yield* Fiber.interrupt(watch);
@@ -183,7 +196,7 @@ test("config watch backs off persistent apply failures and retries a new fingerp
       TestClock.layer(),
     ),
   );
-  assert.ok(result.loads > 0);
+  assert.ok(result.loads > 1);
   assert.ok(result.beforeChange >= 15 && result.beforeChange <= 17);
   await Effect.runPromise(Scope.close(scope, Exit.void));
 });
