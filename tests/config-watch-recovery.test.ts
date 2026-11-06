@@ -144,9 +144,10 @@ test("config watch backs off persistent apply failures and retries a new fingerp
     reload: () =>
       Effect.sync(() => {
         applies++;
-        signal({ type: "reload", ok: !failApply });
       }).pipe(
         Effect.flatMap(() => (failApply ? Effect.fail(new Error("apply failed")) : Effect.void)),
+        Effect.tapError(() => Effect.sync(() => signal({ type: "reload", ok: false }))),
+        Effect.tap(() => Effect.sync(() => signal({ type: "reload", ok: true }))),
       ),
     watchIntervalMs: 1_000,
     startEmptyGlobal: false,
