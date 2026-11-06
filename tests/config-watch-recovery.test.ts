@@ -150,9 +150,10 @@ test("config watch backs off persistent apply failures and retries a new fingerp
         const retryDeadline = lastAFailureAt + retryDelayMs(7);
         fingerprint = "B";
         failApply = false;
-        yield* tick(1);
-        yield* tick(1);
-        for (let i = 0; i < 100; i++) yield* Effect.yieldNow;
+        for (let i = 0; i < 10 && applies < beforeChange + 3; i++) {
+          yield* tick(1);
+          yield* Effect.yieldNow;
+        }
         const afterChange = applies;
         // A successful B replacement invokes reload from project acquisition,
         // observer reconciliation, and replaceProject's final reload.
