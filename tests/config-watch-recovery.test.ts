@@ -1,6 +1,6 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { Clock, Effect, Fiber, Layer, Scope } from "effect";
+import { Clock, Deferred, Effect, Fiber, Layer, Scope } from "effect";
 import { TestClock } from "effect/testing";
 import { makeBrokerRegistry, retryDelayMs } from "../src/broker-registry.js";
 import { ProjectKeyFerryManager, projectDirectory, VarlockError } from "../src/contracts.js";
@@ -101,6 +101,8 @@ test("config watch backs off persistent apply failures and retries a new fingerp
   let loads = 0;
   let applies = 0;
   let failApply = true;
+  let bApplied: Deferred.Deferred<void> | undefined;
+  let bTarget: number | undefined;
   const scope = await Effect.runPromise(Scope.make());
   const controller = makeScopedController({
     configuration,
@@ -110,7 +112,11 @@ test("config watch backs off persistent apply failures and retries a new fingerp
     reload: () =>
       Effect.sync(() => {
         applies++;
+        return bTarget === applies && bApplied
+          ? Deferred.succeed(bApplied, undefined)
+          : Effect.void;
       }).pipe(
+        Effect.flatMap((signal) => signal),
         Effect.flatMap(() => (failApply ? Effect.fail(new Error("apply failed")) : Effect.void)),
       ),
     watchIntervalMs: 1_000,
@@ -148,19 +154,18 @@ test("config watch backs off persistent apply failures and retries a new fingerp
         // The last observed A attempt is the seventh retry at 316s. Its
         // retryDelayMs(7) cap is 300s, so A's real deadline is 616s.
         const retryDeadline = lastAFailureAt + retryDelayMs(7);
+        bApplied = yield* Deferred.make<void>();
+        bTarget = beforeChange + 3;
         fingerprint = "B";
         failApply = false;
-        for (let i = 0; i < 10 && applies < beforeChange + 3; i++) {
+        for (let i = 0; i < 100 && applies < bTarget; i++) {
           yield* tick(1);
-          yield* Effect.yieldNow;
         }
+        yield* Deferred.await(bApplied);
         const afterChange = applies;
         // A successful B replacement invokes reload from project acquisition,
         // observer reconciliation, and replaceProject's final reload.
-        assert.ok(
-          afterChange >= beforeChange + 3,
-          `applies=${afterChange}, before=${beforeChange}`,
-        );
+        assert.equal(afterChange, beforeChange + 3);
         assert.ok((yield* Clock.currentTimeMillis) < retryDeadline);
         assert.deepEqual({ ...controller.configuration().project?.servers.selected }, { B: "B" });
         yield* Fiber.interrupt(watch);
