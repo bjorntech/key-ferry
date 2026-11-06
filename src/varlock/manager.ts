@@ -19,6 +19,7 @@ import {
   type ProcessError,
   type ProcessService,
 } from "../services/process.js";
+import { classifyStderr } from "./diagnostics.js";
 import {
   decodeSessionList,
   findOwnedSession,
@@ -80,6 +81,12 @@ const fromProcessError = (
     retryable: error.code === "timeout" || error.code === "spawn-failed" || error.code === "io",
     message:
       error.code === "timeout" ? "Varlock command timed out" : `Varlock command ${error.code}`,
+    ...(error.stderr
+      ? {
+          stderrTail: classifyStderr(error.stderr).message,
+          stderrCode: classifyStderr(error.stderr).code,
+        }
+      : {}),
   });
 
 function adapterOptions(options: ProjectKeyFerryManagerOptions): AdapterOptions {

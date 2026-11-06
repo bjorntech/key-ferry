@@ -10,6 +10,7 @@ export class ProcessError extends Data.TaggedError("ProcessError")<{
   readonly message: string;
   readonly exitCode?: number;
   readonly signal?: string;
+  readonly stderr?: string;
 }> {}
 
 export interface ProcessExit {
@@ -335,9 +336,13 @@ const run = (input: RunInput): Effect.Effect<RunResult, ProcessError> => {
       if (limited) return Effect.fail(error("capture-limit", "capture-limit"));
       if (code === 0) return Effect.succeed({ code, signal: sig, stdout, stderr });
       return Effect.fail(
-        error("exit", code === null ? "signal" : "non-zero", {
+        new ProcessError({
+          phase: "exit",
+          code: code === null ? "signal" : "non-zero",
+          message: safeMessage("exit", code === null ? "signal" : "non-zero"),
           exitCode: code ?? undefined,
           signal: sig ?? undefined,
+          stderr,
         }),
       );
     };

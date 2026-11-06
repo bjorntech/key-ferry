@@ -45,6 +45,8 @@ export class VarlockError extends Schema.TaggedError<VarlockError>()("Varlock.Er
   ] as const),
   message: Schema.String,
   retryable: Schema.Boolean,
+  stderrTail: Schema.optional(Schema.String),
+  stderrCode: Schema.optional(Schema.String),
 }) {}
 
 /** Safe to return from status RPCs or display to a user. */
@@ -55,6 +57,8 @@ export interface SafeStatus {
   readonly pid?: number;
   readonly endpoint?: string;
   readonly lastRefreshAt?: string;
+  readonly lastFailureAt?: string;
+  readonly nextRetryAt?: string;
   readonly error?: VarlockError;
   readonly diagnostics?: readonly SafeDiagnostic[];
   /** Present when the controller is serving more than the legacy global scope. */
@@ -71,6 +75,8 @@ export interface SafeScopeStatus {
   readonly generation: number;
   readonly pid?: number;
   readonly lastRefreshAt?: string;
+  readonly lastFailureAt?: string;
+  readonly nextRetryAt?: string;
   readonly error?: VarlockError;
   readonly diagnostics?: readonly SafeDiagnostic[];
   readonly activation?: "auto" | "manual" | "awaiting_activation";

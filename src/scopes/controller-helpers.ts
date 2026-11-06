@@ -53,6 +53,8 @@ function optionalStatusFields(status: SafeStatus): Partial<SafeStatus> {
   return {
     ...(status.pid === undefined ? {} : { pid: status.pid }),
     ...(status.lastRefreshAt === undefined ? {} : { lastRefreshAt: status.lastRefreshAt }),
+    ...(status.lastFailureAt === undefined ? {} : { lastFailureAt: status.lastFailureAt }),
+    ...(status.nextRetryAt === undefined ? {} : { nextRetryAt: status.nextRetryAt }),
     ...(status.error === undefined ? {} : { error: status.error }),
   };
 }
@@ -345,6 +347,8 @@ function safeFields(status: SafeScopeStatus): Partial<SafeStatus> {
   return {
     ...(status.pid === undefined ? {} : { pid: status.pid }),
     ...(status.lastRefreshAt === undefined ? {} : { lastRefreshAt: status.lastRefreshAt }),
+    ...(status.lastFailureAt === undefined ? {} : { lastFailureAt: status.lastFailureAt }),
+    ...(status.nextRetryAt === undefined ? {} : { nextRetryAt: status.nextRetryAt }),
     ...(status.error === undefined ? {} : { error: status.error }),
     ...(status.diagnostics === undefined ? {} : { diagnostics: status.diagnostics }),
   };

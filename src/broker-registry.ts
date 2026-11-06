@@ -1,4 +1,6 @@
-import { realpath } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { readdir, readFile, realpath, stat } from "node:fs/promises";
+import { join } from "node:path";
 import {
   Context,
   Deferred,
@@ -34,9 +36,16 @@ export interface BrokerLease extends ProjectKeyFerryManagerService {
 export interface BrokerRegistryOptions {
   readonly canonicalize?: (directory: string) => Effect.Effect<string, unknown>;
   readonly maxEntries?: number;
+  readonly now?: () => number;
 }
 
 type BrokerResult = { readonly status: SafeStatus; readonly environment: ResolvedEnvironment };
+
+export const RETRY_BASE_DELAY_MS = 5_000;
+export const RETRY_MAX_DELAY_MS = 300_000;
+
+export const retryDelayMs = (failureCount: number) =>
+  Math.min(RETRY_MAX_DELAY_MS, RETRY_BASE_DELAY_MS * 2 ** Math.max(0, failureCount - 1));
 type Entry = {
   key: string;
   options: ProjectKeyFerryManagerOptions;
@@ -55,6 +64,11 @@ type Entry = {
   failure?: VarlockError;
   readinessRevision: number;
   disposed: boolean;
+  failureCount: number;
+  lastFailureAt?: string;
+  nextRetryAt?: string;
+  retryBatch?: Deferred.Deferred<BrokerResult, VarlockError>;
+  contextKey: string;
 };
 
 const adapterKeys = new Set([
@@ -111,9 +125,53 @@ function validateOptions(options: ProjectKeyFerryManagerOptions): Record<string,
   return adapter;
 }
 
-function keyFor(directory: string, options: ProjectKeyFerryManagerOptions): string {
+const schemaHashCache = new Map<string, { signature: string; hash: string }>();
+
+async function contentHash(directory: string): Promise<string> {
+  const hash = createHash("sha256");
+  try {
+    const names = (await readdir(directory))
+      .filter((name) => name === ".env.schema" || name.startsWith(".env.schema."))
+      .sort();
+    const metadata = await Promise.all(
+      names.map(async (name) => {
+        const info = await stat(join(directory, name));
+        return `${name}:${info.mtimeMs}:${info.size}`;
+      }),
+    );
+    const signature = metadata.join("\0");
+    const cached = schemaHashCache.get(directory);
+    if (cached?.signature === signature) return cached.hash;
+    for (const name of names) {
+      hash.update(name);
+      hash.update(await readFile(join(directory, name)));
+    }
+    const result = hash.digest("hex");
+    schemaHashCache.set(directory, { signature, hash: result });
+    return result;
+  } catch {
+    // The manager performs the authoritative directory validation. Keep the
+    // registry usable with injected/test canonicalizers and distinguish an
+    // unreadable schema from a real schema without exposing its contents.
+    hash.update("schema-unavailable");
+  }
+  return hash.digest("hex");
+}
+
+async function keyFor(
+  directory: string,
+  options: ProjectKeyFerryManagerOptions,
+): Promise<{ key: string; contextKey: string }> {
   const adapter = validateOptions(options);
-  return stable({
+  const keys = [
+    ...new Set([
+      ...(adapter.environmentKeys as string[]),
+      ...Object.keys(globalThis.process.env).filter((key) => /^OP_/.test(key)),
+    ]),
+  ].sort();
+  const valuesHash = createHash("sha256");
+  for (const key of keys) valuesHash.update(`${key}\0${globalThis.process.env[key] ?? ""}\0`);
+  const context = {
     projectDirectory: directory,
     owner: options.owner,
     sessionID: options.sessionID,
@@ -124,7 +182,15 @@ function keyFor(directory: string, options: ProjectKeyFerryManagerOptions): stri
     reloadTimeoutMs: adapter.reloadTimeoutMs,
     pollIntervalMs: adapter.pollIntervalMs,
     requireStrictEgress: adapter.requireStrictEgress,
-  });
+  };
+  return {
+    contextKey: stable(context),
+    key: stable({
+      ...context,
+      environmentValuesHash: valuesHash.digest("hex"),
+      schemaHash: await contentHash(directory),
+    }),
+  };
 }
 
 function readinessChanged(entry: Entry, revision: number, ready: Entry["ready"]): boolean {
@@ -167,10 +233,30 @@ export function makeBrokerRegistry(configuration: BrokerRegistryOptions = {}) {
     configuration.canonicalize ??
     ((directory: string) => Effect.tryPromise(() => realpath(directory)));
   const maxEntries = configuration.maxEntries ?? 128;
+  const now = configuration.now ?? (() => Date.now());
 
   const publish = (entry: Entry, status: SafeStatus) => {
     entry.status = status;
     return PubSub.publish(entry.events, status);
+  };
+
+  const recordFailure = (entry: Entry, failure: VarlockError) => {
+    entry.failure = failure;
+    entry.failureCount += 1;
+    entry.lastFailureAt = new Date(now()).toISOString();
+    entry.nextRetryAt = new Date(now() + retryDelayMs(entry.failureCount)).toISOString();
+    return {
+      lastFailureAt: entry.lastFailureAt,
+      nextRetryAt: entry.nextRetryAt,
+    };
+  };
+
+  const clearFailure = (entry: Entry) => {
+    entry.failure = undefined;
+    entry.failureCount = 0;
+    entry.lastFailureAt = undefined;
+    entry.nextRetryAt = undefined;
+    entry.retryBatch = undefined;
   };
 
   const start = (entry: Entry): Effect.Effect<BrokerResult, VarlockError> => {
@@ -187,12 +273,13 @@ export function makeBrokerRegistry(configuration: BrokerRegistryOptions = {}) {
     return operation.pipe(
       Effect.catch((error: unknown) => {
         const failure = safeError(error, "start_failed");
-        entry.failure = failure;
+        const metadata = recordFailure(entry, failure);
         return publish(entry, {
           phase: "failed",
           projectDirectory: entry.options.projectDirectory,
           generation: entry.status?.generation ?? 0,
           error: failure,
+          ...metadata,
         }).pipe(Effect.flatMap(() => Effect.fail(failure)));
       }),
     ) as Effect.Effect<BrokerResult, VarlockError>;
@@ -210,8 +297,16 @@ export function makeBrokerRegistry(configuration: BrokerRegistryOptions = {}) {
 
   const completeStartup = (entry: Entry, target: Deferred.Deferred<BrokerResult, VarlockError>) =>
     Fiber.join(entry.startup!).pipe(
-      Effect.flatMap((result) => Deferred.succeed(target, result)),
-      Effect.catch((error: unknown) => Deferred.fail(target, safeError(error, "start_failed"))),
+      Effect.flatMap((result) =>
+        Effect.sync(() => clearFailure(entry)).pipe(
+          Effect.andThen(Deferred.succeed(target, result)),
+        ),
+      ),
+      Effect.catch((error: unknown) =>
+        Effect.sync(() => {
+          entry.attemptPending = false;
+        }).pipe(Effect.andThen(Deferred.fail(target, safeError(error, "start_failed")))),
+      ),
       Effect.tap(() =>
         Effect.sync(() => {
           entry.attemptPending = false;
@@ -244,13 +339,14 @@ export function makeBrokerRegistry(configuration: BrokerRegistryOptions = {}) {
           }).pipe(
             Effect.catch((error: unknown) => {
               const failure = safeError(error, "refresh_failed");
-              entry.failure = failure;
+              const metadata = recordFailure(entry, failure);
               entry.refresh = undefined;
               return publish(entry, {
                 phase: "failed",
                 projectDirectory: entry.options.projectDirectory,
                 generation: entry.status?.generation ?? 0,
                 error: failure,
+                ...metadata,
               }).pipe(Effect.flatMap(() => Deferred.fail(next, failure)));
             }),
             Effect.forkIn(entry.scope),
@@ -267,7 +363,8 @@ export function makeBrokerRegistry(configuration: BrokerRegistryOptions = {}) {
     directory: string,
   ): Effect.Effect<Entry> =>
     Effect.gen(function* () {
-      const key = keyFor(directory, options);
+      const identity = yield* Effect.promise(() => keyFor(directory, options));
+      const key = identity.key;
       const factoryMap = factories.get(factory as object) ?? new Map<string, Entry>();
       factories.set(factory as object, factoryMap);
       const existing = factoryMap.get(key);
@@ -287,7 +384,15 @@ export function makeBrokerRegistry(configuration: BrokerRegistryOptions = {}) {
         leases: new Set(),
         readinessRevision: 0,
         disposed: false,
+        failureCount: 0,
+        contextKey: identity.contextKey,
       };
+      for (const [oldKey, oldEntry] of factoryMap) {
+        if (oldEntry.contextKey !== identity.contextKey || oldEntry.leases.size > 0) continue;
+        yield* Scope.close(oldEntry.scope, Exit.void).pipe(Effect.ignore);
+        entries.delete(oldEntry);
+        factoryMap.delete(oldKey);
+      }
       factoryMap.set(key, entry);
       entries.add(entry);
       return entry;
@@ -423,16 +528,43 @@ export function makeBrokerRegistry(configuration: BrokerRegistryOptions = {}) {
   const retryAttempt = (
     factory: ProjectKeyFerryManagerFactory<any>,
     options: ProjectKeyFerryManagerOptions,
-  ): Effect.Effect<BrokerResult | { waiting: Deferred.Deferred<void> }, any, never> =>
+  ): Effect.Effect<
+    | BrokerResult
+    | { waiting: Deferred.Deferred<void> }
+    | { pending: Deferred.Deferred<BrokerResult, VarlockError> },
+    any,
+    never
+  > =>
     Effect.gen(function* () {
       const directory = yield* canonicalize(options.projectDirectory);
       const target = yield* lock.withPermit(
         Effect.gen(function* () {
-          const entry = factories.get(factory as object)?.get(keyFor(directory, options));
+          const entry = factories
+            .get(factory as object)
+            ?.get((yield* Effect.promise(() => keyFor(directory, options))).key);
+          if (entry?.retryBatch) return entry.retryBatch;
+          if (entry) {
+            const initial = yield* retryEntry(entry);
+            if ("waiting" in initial || "pending" in initial) return initial;
+            const batch = yield* Deferred.make<BrokerResult, VarlockError>();
+            entry.retryBatch = batch;
+            yield* Deferred.await(initial).pipe(
+              Effect.matchEffect({
+                onSuccess: (result) => Deferred.succeed(batch, result),
+                onFailure: (error) => Deferred.fail(batch, error),
+              }),
+              // Keep the completed batch as the result of this explicit
+              // retry. A background retry clears it when its deadline is due
+              // and atomically establishes the next batch.
+              Effect.andThen(Effect.void),
+              Effect.forkDetach,
+            );
+            return batch;
+          }
           return yield* retryEntry(entry);
         }),
       );
-      if ("waiting" in target) return target;
+      if ("waiting" in target || "pending" in target) return target;
       return yield* Deferred.await(target);
     });
 
@@ -446,13 +578,21 @@ export function makeBrokerRegistry(configuration: BrokerRegistryOptions = {}) {
         yield* Deferred.await(result.waiting);
         return yield* retry(factory, options);
       }
+      if ("pending" in result) {
+        // This caller observed an attempt already in flight. Its result is the
+        // result of this retry operation; do not turn a shared failure into a
+        // fresh attempt when the pending attempt completes.
+        return yield* Deferred.await(result.pending);
+      }
       return result;
     });
 
   const retryEntry = (
     entry: Entry | undefined,
   ): Effect.Effect<
-    Deferred.Deferred<BrokerResult, VarlockError> | { waiting: Deferred.Deferred<void> },
+    | Deferred.Deferred<BrokerResult, VarlockError>
+    | { waiting: Deferred.Deferred<void> }
+    | { pending: Deferred.Deferred<BrokerResult, VarlockError> },
     any
   > => {
     if (!entry)
@@ -464,8 +604,8 @@ export function makeBrokerRegistry(configuration: BrokerRegistryOptions = {}) {
         }),
       );
     if (entry.closing) return Effect.succeed({ waiting: entry.closing });
-    if (entry.attempt && entry.attemptPending) return Effect.succeed(entry.attempt);
-    if (!entry.failure)
+    if (entry.attempt && entry.attemptPending) return Effect.succeed({ pending: entry.attempt });
+    if (!entry.failure) {
       return Effect.fail(
         new VarlockError({
           code: "not_ready",
@@ -473,7 +613,12 @@ export function makeBrokerRegistry(configuration: BrokerRegistryOptions = {}) {
           retryable: false,
         }),
       );
+    }
     return Effect.gen(function* () {
+      // The previous attempt is complete (attemptPending was checked above),
+      // so closing its scope cannot race a startup. This runs manager and
+      // certificate-directory finalizers before allocating the replacement.
+      yield* Scope.close(entry.scope, Exit.void).pipe(Effect.ignore);
       entry.failure = undefined;
       entry.disposed = false;
       entry.scope = yield* Scope.make();
@@ -487,7 +632,28 @@ export function makeBrokerRegistry(configuration: BrokerRegistryOptions = {}) {
     });
   };
 
-  return { acquire, retry };
+  const retryIfDue = (
+    factory: ProjectKeyFerryManagerFactory<any>,
+    options: ProjectKeyFerryManagerOptions,
+  ): Effect.Effect<BrokerResult | undefined, any, never> =>
+    Effect.gen(function* () {
+      const directory = yield* canonicalize(options.projectDirectory);
+      const entry = factories
+        .get(factory as object)
+        ?.get((yield* Effect.promise(() => keyFor(directory, options))).key);
+      if (!entry?.failure || (entry.nextRetryAt && now() < Date.parse(entry.nextRetryAt)))
+        return undefined;
+      entry.retryBatch = undefined;
+      return yield* retry(factory, options).pipe(
+        Effect.catch((error) =>
+          error instanceof VarlockError && error.code === "not_ready"
+            ? Effect.succeed(undefined)
+            : Effect.fail(error),
+        ),
+      );
+    });
+
+  return { acquire, retry, retryIfDue };
 }
 
 export const brokerRegistry = makeBrokerRegistry();

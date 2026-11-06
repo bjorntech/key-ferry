@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.1.13 — 2026-11-06
+
+### Fixed
+
+- Failed Varlock brokers now retry automatically with exponential backoff from
+  5 seconds, doubling up to a 5-minute cap; concurrent and explicit retries
+  coalesce into one attempt, avoiding repeated 1Password prompts.
+- Surface failures in `key-ferry.status` and `doctor` as fixed diagnostic codes
+  and messages with `lastFailureAt` and `nextRetryAt`; raw Varlock stderr is
+  never exposed.
+- Include hashes of all `OP_*` environment values and `.env.schema*` contents
+  in the broker key, caching schema hashes by stat; dispose idle stale brokers
+  when the key changes.
+- Keep the config watcher alive through load/apply failures, roll back failed
+  applies, back off retries, and apply new configs promptly.
+- Retain background failures as diagnostics instead of swallowing them.
+
 ## 0.1.12 — 2026-10-17
 
 ### Fixed
