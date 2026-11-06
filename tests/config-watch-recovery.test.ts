@@ -41,15 +41,23 @@ const readyFactory = (directory: string) => {
 type WatchEvent = { type: "load"; tick: number } | { type: "reload"; ok: boolean };
 
 const takeWatchEvent = (events: Queue.Queue<WatchEvent>, label: string) =>
-  Effect.gen(function* () {
-    for (let i = 0; i < 1000; i++) {
-      const event = yield* Queue.poll(events);
-      if (Option.isSome(event)) return event.value;
-      yield* Effect.yieldNow;
-      yield* Effect.promise(() => Promise.resolve());
-    }
-    return yield* Effect.fail(new Error(`timed out waiting for ${label}`));
-  });
+  Effect.raceFirst(
+    Queue.take(events),
+    // This is only a real-time failure guard; TestClock intentionally cannot advance it.
+    Effect.promise(
+      () =>
+        new Promise<never>((_, reject) => {
+          const timer = setTimeout(
+            () => reject(new Error(`timed out waiting for ${label}`)),
+            30_000,
+          );
+          // The timer is only a safety guard and must not keep the test process alive.
+          timer.unref();
+        }),
+    ),
+  );
+
+const inMemorySchemaHash = () => Effect.succeed("test-schema");
 
 const stepWatch = (events: Queue.Queue<WatchEvent>, seconds: number, reloads = 0) =>
   Effect.gen(function* () {
@@ -78,7 +86,10 @@ test("config watch retains a sanitized load failure and continues after a valid 
   const controller = makeScopedController({
     configuration,
     factory: readyFactory(directory),
-    registry: makeBrokerRegistry({ canonicalize: (path) => Effect.succeed(path) }),
+    registry: makeBrokerRegistry({
+      canonicalize: (path) => Effect.succeed(path),
+      schemaHash: inMemorySchemaHash,
+    }),
     scope,
     reload: () => Effect.sync(() => signal({ type: "reload", ok: true })),
     watchIntervalMs: 1_000,
@@ -142,7 +153,10 @@ test("config watch backs off persistent apply failures and retries a new fingerp
   const controller = makeScopedController({
     configuration,
     factory: readyFactory(directory),
-    registry: makeBrokerRegistry({ canonicalize: (path) => Effect.succeed(path) }),
+    registry: makeBrokerRegistry({
+      canonicalize: (path) => Effect.succeed(path),
+      schemaHash: inMemorySchemaHash,
+    }),
     scope,
     reload: () =>
       Effect.sync(() => {
