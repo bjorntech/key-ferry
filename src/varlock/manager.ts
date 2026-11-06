@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import { access, mkdtemp, realpath, rm, stat, lstat } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -21,6 +22,13 @@ import {
 } from "../services/process.js";
 import { classifyStderr } from "./diagnostics.js";
 import {
+  removeOwnershipRecord,
+  reapStaleOwnershipRecords,
+  writeOwnershipRecord,
+  ownershipFileOps,
+  ownershipDirectory,
+} from "./ownership.js";
+import {
   decodeSessionList,
   findOwnedSession,
   sanitizeSessionStatus,
@@ -36,6 +44,7 @@ const DEFAULT_REFRESH_TIMEOUT = 30_000;
 const DEFAULT_POLL_INTERVAL = 100;
 const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
 const MAX_TIMEOUT = 10 * 60_000;
+const DEFAULT_HEALTH_CHECK_INTERVAL = 1_000;
 
 type AdapterOptions = {
   command: readonly string[];
@@ -45,6 +54,12 @@ type AdapterOptions = {
   reloadTimeoutMs: number;
   pollIntervalMs: number;
   requireStrictEgress: boolean;
+  lifecycleLogger?: (event: {
+    readonly event: "stop-failed";
+    readonly proxySessionId?: string;
+  }) => void;
+  ownershipDirectory?: string;
+  healthCheckIntervalMs: number;
 };
 
 type ManagerFileOps = {
@@ -70,7 +85,14 @@ const safeError = (
   code: ConstructorParameters<typeof VarlockError>[0]["code"],
   retryable: boolean,
 ): VarlockError =>
-  new VarlockError({ code, retryable, message: `Varlock ${code.replaceAll("_", " ")}` });
+  new VarlockError({
+    code,
+    retryable,
+    message:
+      code === "ownership_unavailable"
+        ? "Key Ferry ownership directory is unavailable"
+        : `Varlock ${code.replaceAll("_", " ")}`,
+  });
 
 const fromProcessError = (
   error: ProcessError,
@@ -93,43 +115,108 @@ function adapterOptions(options: ProjectKeyFerryManagerOptions): AdapterOptions 
   const raw = options.adapter ?? {};
   const command = raw.command === undefined ? [...DEFAULT_COMMAND] : raw.command;
   const environmentKeys = raw.environmentKeys;
-  if (
-    !Array.isArray(command) ||
-    command.length === 0 ||
-    command.length > 32 ||
-    command.some(
-      (v) => typeof v !== "string" || v.length === 0 || v.length > 1024 || v.includes("\0"),
-    )
-  ) {
-    throw safeError("invalid_config", false);
-  }
-  if (
-    !Array.isArray(environmentKeys) ||
-    environmentKeys.length > 128 ||
-    environmentKeys.some(
-      (v) => typeof v !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(v) || v.length > 256,
-    )
-  ) {
-    throw safeError("invalid_config", false);
-  }
-  const numberOption = (name: string, fallback: number, min: number, max: number): number => {
-    const value = raw[name];
-    if (value === undefined) return fallback;
-    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < min || value > max)
-      throw safeError("invalid_config", false);
-    return value;
-  };
-  const strict = raw.requireStrictEgress;
-  if (strict !== undefined && typeof strict !== "boolean") throw safeError("invalid_config", false);
+  const [validCommand, validEnvironmentKeys] = validateAdapterArrays(command, environmentKeys);
+  const ownershipDirectory = raw.ownershipDirectory;
+  validateOwnershipDirectory(ownershipDirectory);
   return {
-    command: [...command] as string[],
-    environmentKeys: [...environmentKeys] as string[],
-    startupTimeoutMs: numberOption("startupTimeoutMs", DEFAULT_START_TIMEOUT, 100, MAX_TIMEOUT),
-    commandTimeoutMs: numberOption("commandTimeoutMs", DEFAULT_COMMAND_TIMEOUT, 100, MAX_TIMEOUT),
-    reloadTimeoutMs: numberOption("reloadTimeoutMs", DEFAULT_REFRESH_TIMEOUT, 100, MAX_TIMEOUT),
-    pollIntervalMs: numberOption("pollIntervalMs", DEFAULT_POLL_INTERVAL, 10, 10_000),
-    requireStrictEgress: strict ?? true,
+    command: [...validCommand],
+    environmentKeys: [...validEnvironmentKeys],
+    startupTimeoutMs: adapterNumber(
+      raw,
+      "startupTimeoutMs",
+      DEFAULT_START_TIMEOUT,
+      100,
+      MAX_TIMEOUT,
+    ),
+    commandTimeoutMs: adapterNumber(
+      raw,
+      "commandTimeoutMs",
+      DEFAULT_COMMAND_TIMEOUT,
+      100,
+      MAX_TIMEOUT,
+    ),
+    reloadTimeoutMs: adapterNumber(
+      raw,
+      "reloadTimeoutMs",
+      DEFAULT_REFRESH_TIMEOUT,
+      100,
+      MAX_TIMEOUT,
+    ),
+    pollIntervalMs: adapterNumber(raw, "pollIntervalMs", DEFAULT_POLL_INTERVAL, 10, 10_000),
+    requireStrictEgress: readStrictEgress(raw.requireStrictEgress),
+    ...(ownershipDirectory === undefined ? {} : { ownershipDirectory }),
+    healthCheckIntervalMs: adapterNumber(
+      raw,
+      "healthCheckIntervalMs",
+      DEFAULT_HEALTH_CHECK_INTERVAL,
+      100,
+      MAX_TIMEOUT,
+    ),
+    ...readLifecycleLogger(raw),
   };
+}
+
+function validateAdapterArrays(command: unknown, environmentKeys: unknown): [string[], string[]] {
+  if (!validCommandArray(command) || !validEnvironmentKeyArray(environmentKeys))
+    throw safeError("invalid_config", false);
+  return [command, environmentKeys];
+}
+
+function validateOwnershipDirectory(value: unknown): asserts value is string | undefined {
+  if (value !== undefined && (typeof value !== "string" || value.length === 0))
+    throw safeError("invalid_config", false);
+}
+
+function adapterNumber(
+  raw: Record<string, unknown>,
+  name: string,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  const value = raw[name];
+  if (value === undefined) return fallback;
+  if (!validAdapterNumber(value, min, max)) throw safeError("invalid_config", false);
+  return value;
+}
+function validAdapterNumber(value: unknown, min: number, max: number): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= min && value <= max;
+}
+
+function readLifecycleLogger(
+  raw: Record<string, unknown>,
+): Pick<AdapterOptions, "lifecycleLogger"> {
+  return typeof raw.lifecycleLogger === "function"
+    ? {
+        lifecycleLogger: raw.lifecycleLogger as AdapterOptions["lifecycleLogger"],
+      }
+    : {};
+}
+
+function validCommandArray(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.length <= 32 &&
+    value.every(
+      (v) => typeof v === "string" && v.length > 0 && v.length <= 1024 && !v.includes("\0"),
+    )
+  );
+}
+
+function validEnvironmentKeyArray(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= 128 &&
+    value.every(
+      (v) => typeof v === "string" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(v) && v.length <= 256,
+    )
+  );
+}
+
+function readStrictEgress(value: unknown): boolean {
+  if (value !== undefined && typeof value !== "boolean") throw safeError("invalid_config", false);
+  return value ?? true;
 }
 
 function safeProjectDirectory(value: string): string {
@@ -174,27 +261,38 @@ function parseEnvironmentOutput(raw: string): Readonly<Record<string, string>> {
 }
 
 function statusSnapshot(state: ManagerState, projectDirectory: string): SafeStatus {
-  let endpoint: string | undefined;
-  if (state.session) {
-    try {
-      endpoint = validateProxyWiring(state.session.env).proxyUrl;
-    } catch {
-      endpoint = undefined;
-    }
-  }
   return {
     phase: state.phase,
     projectDirectory: projectDirectory as SafeStatus["projectDirectory"],
     generation: state.generation,
+    ...statusOptionalFields(state),
+  };
+}
+
+function statusOptionalFields(state: ManagerState): Partial<SafeStatus> {
+  return {
     ...(state.process ? { pid: state.process.pid } : {}),
-    ...(endpoint ? { endpoint } : {}),
+    ...(state.session ? { sessionId: state.session.uuid, proxySessionId: state.session.uuid } : {}),
+    ...statusEndpointField(state),
     ...(state.lastRefreshAt ? { lastRefreshAt: state.lastRefreshAt } : {}),
     ...(state.error ? { error: state.error } : {}),
   };
 }
 
+function statusEndpointField(state: ManagerState): Partial<SafeStatus> {
+  if (!state.session) return {};
+  try {
+    return { endpoint: validateProxyWiring(state.session.env).proxyUrl };
+  } catch {
+    return {};
+  }
+}
+
 function commandParts(options: AdapterOptions, args: readonly string[]) {
-  return { executable: options.command[0]!, args: [...options.command.slice(1), ...args] };
+  return {
+    executable: options.command[0]!,
+    args: [...options.command.slice(1), ...args],
+  };
 }
 
 function runCommand(
@@ -207,7 +305,13 @@ function runCommand(
 ): Effect.Effect<{ stdout: string; stderr: string }, VarlockError> {
   const parts = commandParts(options, args);
   return process
-    .run({ ...parts, cwd, env: environment, maxBytes: MAX_OUTPUT_BYTES, timeoutMs })
+    .run({
+      ...parts,
+      cwd,
+      env: environment,
+      maxBytes: MAX_OUTPUT_BYTES,
+      timeoutMs,
+    })
     .pipe(
       Effect.mapError((error) =>
         fromProcessError(error, error.code === "timeout" ? "timeout" : "unavailable"),
@@ -239,12 +343,24 @@ function requireRefreshProcess(state: ManagerState): Effect.Effect<void, Varlock
 
 function prepareStart(
   state: ManagerState,
-  healthCheck: () => Effect.Effect<void, VarlockError>,
+  healthCheck: (force?: boolean) => Effect.Effect<void, VarlockError>,
   snapshot: () => SafeStatus,
 ): Effect.Effect<SafeStatus | undefined, VarlockError> {
   if (state.disposed) return Effect.fail(safeError("disposed", false));
   if (!state.process || !state.session) return Effect.succeed(undefined);
-  return healthCheck().pipe(Effect.map(() => (state.phase === "ready" ? snapshot() : undefined)));
+  return healthCheck(true).pipe(Effect.flatMap(() => prepareExistingStart(state, snapshot)));
+}
+
+function prepareExistingStart(
+  state: ManagerState,
+  snapshot: () => SafeStatus,
+): Effect.Effect<SafeStatus | undefined, VarlockError> {
+  if (!state.process || !state.session) return Effect.succeed(undefined);
+  if (state.phase === "ready") return Effect.succeed(snapshot());
+  return Effect.fail(startFailure(state.error));
+}
+function startFailure(error: VarlockError | undefined): VarlockError {
+  return error ?? safeError("not_ready", true);
 }
 
 function requireRefreshSession(
@@ -319,19 +435,10 @@ function validateStartupEgress(
   state: ManagerState,
   requireStrictEgress: boolean,
   session: VarlockSessionRecord,
-  handle: ManagedProcess,
+  _handle: ManagedProcess,
 ): Effect.Effect<void, VarlockError> {
   if (!requireStrictEgress || session.egressMode === "strict") return Effect.void;
-  const error = safeError("invalid_config", false);
-  return handle.stop.pipe(
-    Effect.catch(() => Effect.void),
-    Effect.tap(() =>
-      Effect.sync(() => {
-        state.process = undefined;
-      }),
-    ),
-    Effect.flatMap(() => Effect.fail(error)),
-  );
+  return Effect.fail(safeError("invalid_config", false));
 }
 
 function assertRegularCertificate(pathInfo: Awaited<ReturnType<typeof lstat>>): void {
@@ -373,6 +480,13 @@ export function makeProjectKeyFerryManager(
       // released, rather than being released at the end of ensureStarted.
       const managerScope = yield* Scope.Scope;
       const config = adapterOptions(options);
+      // Stale cleanup is bounded, idempotent, and never gates MCP startup.
+      yield* Effect.promise(() =>
+        reapStaleOwnershipRecords(
+          config.command,
+          ownershipFileOps(config.ownershipDirectory ?? ownershipDirectory()),
+        ),
+      ).pipe(Effect.forkDetach, Effect.asVoid);
       const requestedCwd = safeProjectDirectory(options.projectDirectory);
       const cwd = yield* Effect.tryPromise({
         try: async () => {
@@ -397,24 +511,104 @@ export function makeProjectKeyFerryManager(
       let certDirectoryReal: string | undefined;
       const ownedCertDirectories = new Set<string>();
       const lock = yield* Semaphore.make(1);
-      const state: ManagerState = { phase: "stopped", generation: 0, disposed: false };
+      const state: ManagerState = {
+        phase: "stopped",
+        generation: 0,
+        disposed: false,
+      };
+      let ownershipHash = createHash("sha256").update(cwd).digest("hex");
+      const ownershipRecord = (
+        session: VarlockSessionRecord,
+        pid: number,
+        _command: readonly string[],
+      ) =>
+        Effect.tryPromise({
+          try: async () => {
+            const starterStartTime = processService.startTime
+              ? await Effect.runPromise(processService.startTime(pid))
+              : undefined;
+            await writeOwnershipRecord(
+              {
+                brokerKeyHash: (ownershipHash = createHash("sha256")
+                  .update(`${cwd}\0${session.uuid}`)
+                  .digest("hex")),
+                version: 2,
+                sessionUuid: session.uuid,
+                starterPid: pid,
+                ...(starterStartTime ? { starterStartTime } : {}),
+                cwd,
+                created: new Date().toISOString(),
+              },
+              ownershipFileOps(config.ownershipDirectory ?? ownershipDirectory()),
+            );
+          },
+          catch: () => safeError("ownership_unavailable", false),
+        });
 
       const clearCapability = (phase: SafeStatus["phase"], error?: VarlockError) => {
         state.phase = phase;
         state.environment = undefined;
-        state.session = undefined;
         state.error = error;
         state.generation += 1;
       };
 
-      const healthCheck = (): Effect.Effect<void> => {
-        if (!state.process) return Effect.void;
-        return state.process.health.pipe(
-          Effect.flatMap((health) => {
-            if (health.running) return Effect.void;
-            clearCapability("degraded", safeError("unavailable", true));
-            return Effect.void;
+      let lastHealthCheckAt = 0;
+      const healthCheck = (force = false): Effect.Effect<void> => {
+        if (!state.process || !state.session) return Effect.void;
+        if (!force && Date.now() - lastHealthCheckAt < config.healthCheckIntervalMs)
+          return Effect.void;
+        lastHealthCheckAt = Date.now();
+        const old = state.session;
+        const oldHandle = state.process;
+        return runCommand(
+          processService,
+          config,
+          cwd,
+          ["proxy", "status", "--format", "json"],
+          config.commandTimeoutMs,
+          ambientEnvironment,
+        ).pipe(
+          // A failed status query is unknown, not evidence that the proxy died.
+          Effect.flatMap(({ stdout }) =>
+            Effect.try({
+              try: () => decodeSessionList(stdout),
+              catch: () => undefined as readonly VarlockSessionRecord[] | undefined,
+            }),
+          ),
+          Effect.flatMap((records) => {
+            if (!records) return Effect.void;
+            return oldHandle.health.pipe(
+              Effect.flatMap((health) => {
+                const failedStarter =
+                  !health.running &&
+                  health.exit !== undefined &&
+                  (health.exit.code !== 0 || health.exit.signal !== null);
+                const active = records.some(
+                  (item) => item.uuid === old.uuid && item.endedAt === undefined,
+                );
+                if (active && !failedStarter) return Effect.void;
+                return stopCapturedSession(old).pipe(
+                  Effect.tap((stopped) =>
+                    oldHandle.stop.pipe(Effect.catch(() => Effect.void)).pipe(
+                      Effect.andThen(
+                        Effect.sync(() => {
+                          if (stopped) {
+                            state.process = undefined;
+                            clearCapability("degraded", safeError("unavailable", true));
+                          } else {
+                            state.phase = "degraded";
+                            state.error = safeError("unavailable", true);
+                          }
+                        }),
+                      ),
+                    ),
+                  ),
+                  Effect.asVoid,
+                );
+              }),
+            );
           }),
+          Effect.catch(() => Effect.void),
         );
       };
 
@@ -422,6 +616,81 @@ export function makeProjectKeyFerryManager(
         Effect.asVoid,
         Effect.map(() => statusSnapshot(state, cwd)),
       );
+
+      // `proxy start` is a daemon command: the CLI process we spawn may hand
+      // the listener to a longer-lived session process. Always use Varlock's
+      // session protocol first, then reap our owned process group as a bounded
+      // fallback. The command is deliberately best-effort during teardown.
+      const stopProxy = (session: VarlockSessionRecord | undefined) =>
+        session
+          ? runCommand(
+              processService,
+              config,
+              cwd,
+              ["proxy", "stop", "--session", session.uuid],
+              config.commandTimeoutMs,
+              ambientEnvironment,
+            ).pipe(
+              Effect.as(true),
+              Effect.catch(() =>
+                Effect.sync(() => {
+                  config.lifecycleLogger?.({
+                    event: "stop-failed",
+                    proxySessionId: session.uuid,
+                  });
+                  return false;
+                }),
+              ),
+            )
+          : Effect.succeed(true);
+
+      const stopCapturedSession = (session = state.session) =>
+        stopProxy(session).pipe(
+          Effect.tap((stopped) =>
+            stopped
+              ? Effect.tryPromise({
+                  try: () =>
+                    removeOwnershipRecord(
+                      ownershipHash,
+                      ownershipFileOps(config.ownershipDirectory ?? ownershipDirectory()),
+                    ),
+                  catch: () => undefined,
+                }).pipe(
+                  Effect.catch(() => Effect.void),
+                  Effect.andThen(
+                    Effect.sync(() => {
+                      if (state.session?.uuid === session?.uuid) state.session = undefined;
+                    }),
+                  ),
+                )
+              : Effect.void,
+          ),
+        );
+
+      const cleanupUncapturedSessions = (handle: ManagedProcess) =>
+        runCommand(
+          processService,
+          config,
+          cwd,
+          ["proxy", "status", "--format", "json"],
+          config.commandTimeoutMs,
+          ambientEnvironment,
+        ).pipe(
+          Effect.flatMap(({ stdout }) =>
+            Effect.try({
+              try: () => decodeSessionList(stdout),
+              catch: () => [] as readonly VarlockSessionRecord[],
+            }),
+          ),
+          Effect.flatMap((records) =>
+            Effect.forEach(
+              records.filter((record) => record.ownerPid === handle.pid && record.cwd === cwd),
+              (record) => stopProxy(record),
+              { discard: true },
+            ),
+          ),
+          Effect.catch(() => Effect.void),
+        );
 
       const waitForSession = (
         handle: ManagedProcess,
@@ -541,9 +810,11 @@ export function makeProjectKeyFerryManager(
       const interruptedStartCleanup = (handle?: ManagedProcess, directory?: string) =>
         Effect.uninterruptible(
           Effect.gen(function* () {
-            if (handle) yield* handle.stop.pipe(Effect.catch(() => Effect.void));
+            yield* stopCapturedSession();
+            if (handle) {
+              yield* handle.stop.pipe(Effect.catch(() => Effect.void));
+            }
             state.process = undefined;
-            state.session = undefined;
             state.environment = undefined;
             clearCapability("failed", safeError("timeout", true));
             if (directory) {
@@ -584,28 +855,50 @@ export function makeProjectKeyFerryManager(
             ]);
             const handle = yield* Effect.provideService(
               processService
-                .spawn({ ...parts, cwd, env: ambientEnvironment, terminateGraceMs: 500 })
+                .spawn({
+                  ...parts,
+                  cwd,
+                  env: ambientEnvironment,
+                  terminateGraceMs: 500,
+                })
                 .pipe(Effect.mapError((error) => fromProcessError(error, "start_failed"))),
               Scope.Scope,
               managerScope,
             );
             acquired = handle;
             state.process = handle;
+            let startedSession: VarlockSessionRecord | undefined;
             const result = yield* waitForSession(handle).pipe(
               Effect.flatMap((session) =>
-                readEnvironment(session).pipe(
-                  Effect.map((environment) => ({ session, environment })),
-                ),
+                Effect.gen(function* () {
+                  startedSession = session;
+                  // Capture is the ownership boundary: publish before any
+                  // environment or policy work can fail.
+                  state.session = session;
+                  yield* ownershipRecord(session, handle.pid, [config.command[0]!, ...parts.args]);
+                  const environment = yield* readEnvironment(session);
+                  yield* validateStartupEgress(state, config.requireStrictEgress, session, handle);
+                  return { session, environment };
+                }),
               ),
               Effect.catch((error) =>
                 Effect.gen(function* () {
+                  const captured = startedSession;
+                  let stopped = true;
+                  if (captured) {
+                    stopped = yield* stopCapturedSession(captured);
+                  } else yield* cleanupUncapturedSessions(handle);
                   yield* handle.stop.pipe(Effect.catch(() => Effect.void));
-                  state.process = undefined;
+                  if (stopped) {
+                    state.process = undefined;
+                  } else {
+                    state.phase = "failed";
+                    state.error = error;
+                  }
                   return yield* Effect.fail(error);
                 }),
               ),
             );
-            yield* validateStartupEgress(state, config.requireStrictEgress, result.session, handle);
             state.session = result.session;
             state.environment = result.environment;
             state.phase = "ready";
@@ -614,8 +907,14 @@ export function makeProjectKeyFerryManager(
           }).pipe(
             Effect.catch((error) =>
               Effect.gen(function* () {
-                if (error.code !== "disposed") clearCapability("failed", error);
-                return yield* Effect.fail(error);
+                const failure = error ?? safeError("start_failed", true);
+                if (failure.code !== "disposed") {
+                  // A failed post-capture stop must retain the session so the
+                  // finalizer can retry the exact UUID without deleting its record.
+                  if (state.phase === "failed" && state.session) state.error = failure;
+                  else clearCapability("failed", failure);
+                }
+                return yield* Effect.fail(failure);
               }),
             ),
             Effect.onInterrupt(() => interruptedStartCleanup(acquired, cleanupDirectory)),
@@ -640,7 +939,10 @@ export function makeProjectKeyFerryManager(
             yield* startInternal();
           }
           if (!state.environment) return yield* Effect.fail(safeError("not_ready", true));
-          return { status: statusSnapshot(state, cwd), environment: state.environment };
+          return {
+            status: statusSnapshot(state, cwd),
+            environment: state.environment,
+          };
         }),
       );
 
@@ -657,7 +959,11 @@ export function makeProjectKeyFerryManager(
       );
 
       const refreshInternal = Effect.gen(function* () {
-        yield* ensureRefreshReadiness({ state, healthCheck, start: startInternal });
+        yield* ensureRefreshReadiness({
+          state,
+          healthCheck,
+          start: startInternal,
+        });
         const session = yield* requireRefreshSession(state);
         const reload = runCommand(
           processService,
@@ -717,7 +1023,10 @@ export function makeProjectKeyFerryManager(
           Effect.gen(function* () {
             if (error.code !== "disposed") {
               const handle = state.process;
-              if (handle) yield* handle.stop.pipe(Effect.catch(() => Effect.void));
+              yield* stopCapturedSession();
+              if (handle) {
+                yield* handle.stop.pipe(Effect.catch(() => Effect.void));
+              }
               state.process = undefined;
               clearCapability(
                 "failed",
@@ -744,13 +1053,16 @@ export function makeProjectKeyFerryManager(
 
       const dispose = lock.withPermit(
         Effect.gen(function* () {
-          if (state.disposed) return;
+          if (state.disposed && !state.session) return;
           state.disposed = true;
           state.phase = "stopping";
           const handle = state.process;
+          const stopped = yield* stopCapturedSession();
+          if (!stopped) return;
           state.environment = undefined;
-          state.session = undefined;
-          if (handle) yield* handle.stop.pipe(Effect.catch(() => Effect.void));
+          if (handle) {
+            yield* handle.stop.pipe(Effect.catch(() => Effect.void));
+          }
           state.process = undefined;
           state.phase = "stopped";
           state.generation += 1;
@@ -768,7 +1080,9 @@ export function makeProjectKeyFerryManager(
         withExclusive: <A, E, R>(effect: Effect.Effect<A, E, R>) => lock.withPermit(effect),
       };
       yield* Effect.addFinalizer(() =>
-        Effect.forEach([...ownedCertDirectories], removeOwnedDirectory, { discard: true }),
+        Effect.forEach([...ownedCertDirectories], removeOwnedDirectory, {
+          discard: true,
+        }),
       );
       // Finalizers run in reverse registration order, so stop the sidecar
       // before removing the directory that contains its CA.

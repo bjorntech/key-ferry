@@ -193,6 +193,8 @@ function pluginContext(location: string, project: string) {
       reloadTimeoutMs: 2_000,
       pollIntervalMs: 10,
       requireStrictEgress: true,
+      // These tests document the legacy immediate release path.
+      idleTimeoutMs: 0,
     },
     location: { project: { directory: location } },
     mcp: {
@@ -286,6 +288,7 @@ test("global broker fanout: eleven plugin scopes must share one manager process"
       locations.map((location) => pluginContext(location, canonicalProject)),
     );
     await waitFor(() => fixture.spawns.length === 1);
+    await waitFor(() => fixture.runs.filter((run) => run.operation === "environment").length === 1);
     assert.equal(fixture.spawns.length, 1);
     assert.equal(fixture.runs.filter((run) => run.operation === "status").length, 1);
     assert.equal(fixture.runs.filter((run) => run.operation === "environment").length, 1);

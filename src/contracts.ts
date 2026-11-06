@@ -10,7 +10,14 @@ import { Context, Effect, Layer, Schema, Scope } from "effect";
 
 export type ProjectDirectory = string & { readonly __projectDirectory: unique symbol };
 
-export type ManagerPhase = "stopped" | "starting" | "ready" | "degraded" | "failed" | "stopping";
+export type ManagerPhase =
+  | "stopped"
+  | "starting"
+  | "ready"
+  | "degraded"
+  | "failed"
+  | "stopping"
+  | "idle";
 
 /** The two supported Key Ferry lifecycle scopes. */
 export type ScopeId = "global" | "project";
@@ -29,7 +36,8 @@ export type VarlockErrorCode =
   | "not_ready"
   | "disposed"
   | "protocol_error"
-  | "timeout";
+  | "timeout"
+  | "ownership_unavailable";
 
 /** Tagged and already-sanitized error safe for public diagnostics. */
 export class VarlockError extends Schema.TaggedError<VarlockError>()("Varlock.Error", {
@@ -42,6 +50,7 @@ export class VarlockError extends Schema.TaggedError<VarlockError>()("Varlock.Er
     "disposed",
     "protocol_error",
     "timeout",
+    "ownership_unavailable",
   ] as const),
   message: Schema.String,
   retryable: Schema.Boolean,
@@ -55,6 +64,9 @@ export interface SafeStatus {
   readonly projectDirectory: ProjectDirectory;
   readonly generation: number;
   readonly pid?: number;
+  /** UUID captured from Varlock's proxy session protocol. */
+  readonly proxySessionId?: string;
+  readonly idleUntil?: string;
   readonly endpoint?: string;
   readonly lastRefreshAt?: string;
   readonly lastFailureAt?: string;
@@ -74,6 +86,7 @@ export interface SafeScopeStatus {
   readonly phase: ManagerPhase;
   readonly generation: number;
   readonly pid?: number;
+  readonly idleUntil?: string;
   readonly lastRefreshAt?: string;
   readonly lastFailureAt?: string;
   readonly nextRetryAt?: string;

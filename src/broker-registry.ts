@@ -4,6 +4,7 @@ import { join } from "node:path";
 import {
   Context,
   Deferred,
+  Duration,
   Effect,
   Exit,
   Fiber,
@@ -22,6 +23,7 @@ import {
   type SafeStatus,
   VarlockError,
 } from "./contracts.js";
+import { setOwnershipLifecycleLogger } from "./varlock/ownership.js";
 
 export interface BrokerSubscription {
   readonly current: Effect.Effect<SafeStatus>;
@@ -39,6 +41,28 @@ export interface BrokerRegistryOptions {
   readonly schemaHash?: (directory: string) => Effect.Effect<string, unknown>;
   readonly maxEntries?: number;
   readonly now?: () => number;
+  readonly idleTimeoutMs?: number;
+  readonly logger?: (event: BrokerLogEvent) => void;
+  readonly hostShutdownHooks?: boolean;
+}
+
+export interface BrokerLogEvent {
+  readonly event:
+    | "start"
+    | "ready"
+    | "release"
+    | "idle-scheduled"
+    | "reused"
+    | "disposed"
+    | "stop-failed"
+    | "dispose-failed"
+    | "stale-reaped"
+    | "stale-skipped";
+  readonly scope: "global" | "project";
+  readonly directory: string;
+  readonly keyHash: string;
+  readonly pid?: number;
+  readonly proxySessionId?: string;
 }
 
 type BrokerResult = { readonly status: SafeStatus; readonly environment: ResolvedEnvironment };
@@ -70,6 +94,8 @@ type Entry = {
   lastFailureAt?: string;
   nextRetryAt?: string;
   retryBatch?: Deferred.Deferred<BrokerResult, VarlockError>;
+  idleFiber?: Fiber.Fiber<void>;
+  idleUntil?: string;
   contextKey: string;
 };
 
@@ -85,6 +111,7 @@ const adapterKeys = new Set([
   "reloadTimeoutMs",
   "pollIntervalMs",
   "requireStrictEgress",
+  "idleTimeoutMs",
 ]);
 
 function safeError(error: unknown, code: "start_failed" | "refresh_failed" | "disposed") {
@@ -190,6 +217,7 @@ function keyFor(
       reloadTimeoutMs: adapter.reloadTimeoutMs,
       pollIntervalMs: adapter.pollIntervalMs,
       requireStrictEgress: adapter.requireStrictEgress,
+      idleTimeoutMs: adapter.idleTimeoutMs,
     };
     return {
       contextKey: stable(context),
@@ -237,6 +265,7 @@ function awaitCurrentReady(entry: Entry): Effect.Effect<BrokerResult, VarlockErr
 export function makeBrokerRegistry(configuration: BrokerRegistryOptions = {}) {
   const entries = new Set<Entry>();
   const factories = new WeakMap<object, Map<string, Entry>>();
+  const factoryMaps = new Set<Map<string, Entry>>();
   const lock = Effect.runSync(Semaphore.make(1));
   const canonicalize =
     configuration.canonicalize ??
@@ -246,6 +275,26 @@ export function makeBrokerRegistry(configuration: BrokerRegistryOptions = {}) {
     ((directory: string) => Effect.tryPromise(() => contentHash(directory)));
   const maxEntries = configuration.maxEntries ?? 128;
   const now = configuration.now ?? (() => Date.now());
+  // Direct registry consumers historically received immediate teardown. The
+  // validated plugin adapter always supplies the public ten-minute default;
+  // retaining this fallback keeps injected/test registries backwards compatible.
+  const idleTimeoutMs = configuration.idleTimeoutMs ?? 0;
+  const log = (entry: Entry, event: BrokerLogEvent["event"]) => {
+    configuration.logger?.({
+      event,
+      scope: entry.options.owner === "key-ferry" ? "project" : "global",
+      directory: entry.options.projectDirectory,
+      keyHash: createHash("sha256").update(entry.key).digest("hex").slice(0, 12),
+      ...(entry.status?.pid === undefined ? {} : { pid: entry.status.pid }),
+      ...((entry.status as (SafeStatus & { proxySessionId?: string }) | undefined)
+        ?.proxySessionId === undefined
+        ? {}
+        : {
+            proxySessionId: (entry.status as SafeStatus & { proxySessionId?: string })
+              .proxySessionId,
+          }),
+    });
+  };
 
   const publish = (entry: Entry, status: SafeStatus) => {
     entry.status = status;
@@ -277,11 +326,37 @@ export function makeBrokerRegistry(configuration: BrokerRegistryOptions = {}) {
     Effect.gen(function* () {
       for (const [oldKey, oldEntry] of factoryMap) {
         if (oldEntry.contextKey !== contextKey || oldEntry.leases.size > 0) continue;
-        yield* Scope.close(oldEntry.scope, Exit.void).pipe(Effect.ignore);
+        yield* disposeEntry(oldEntry);
         entries.delete(oldEntry);
         factoryMap.delete(oldKey);
       }
     });
+
+  const disposeEntry = (entry: Entry) =>
+    Effect.gen(function* () {
+      log(entry, "disposed");
+      if (entry.idleFiber) {
+        yield* Fiber.interrupt(entry.idleFiber);
+        entry.idleFiber = undefined;
+      }
+      if (entry.startup) yield* Fiber.interrupt(entry.startup);
+      if (entry.manager) {
+        yield* entry.manager.dispose.pipe(
+          Effect.catch(() =>
+            Effect.sync(() => {
+              // The manager may have left the ownership record in place. Drop
+              // the in-process entry, but make the startup reaper handoff
+              // explicit so cleanup is still observable without error text.
+              log(entry, "dispose-failed");
+            }),
+          ),
+        );
+      }
+      yield* Scope.close(entry.scope, Exit.void).pipe(Effect.ignore);
+      entry.manager = undefined;
+      entry.disposed = true;
+      entry.idleUntil = undefined;
+    }).pipe(Effect.catch(() => Effect.void));
 
   const start = (entry: Entry): Effect.Effect<BrokerResult, VarlockError> => {
     const operation: Effect.Effect<BrokerResult, VarlockError, any> = Effect.gen(function* () {
@@ -290,7 +365,10 @@ export function makeBrokerRegistry(configuration: BrokerRegistryOptions = {}) {
       );
       const manager = Context.get(context, ProjectKeyFerryManager);
       entry.manager = manager;
+      entry.status = yield* manager.status;
+      log(entry, "start");
       const result = yield* manager.ensureReady;
+      log(entry, "ready");
       yield* publish(entry, result.status);
       return result;
     });
@@ -391,6 +469,7 @@ export function makeBrokerRegistry(configuration: BrokerRegistryOptions = {}) {
       const key = identity.key;
       const factoryMap = factories.get(factory as object) ?? new Map<string, Entry>();
       factories.set(factory as object, factoryMap);
+      factoryMaps.add(factoryMap);
       const existing = factoryMap.get(key);
       if (existing) return existing;
       if (entries.size >= maxEntries) return yield* capacityFailure();
@@ -423,8 +502,7 @@ export function makeBrokerRegistry(configuration: BrokerRegistryOptions = {}) {
   ) =>
     Effect.gen(function* () {
       if (entry.startup) yield* Fiber.interrupt(entry.startup);
-      if (entry.manager) yield* entry.manager.dispose;
-      yield* Scope.close(entry.scope, Exit.void);
+      yield* disposeEntry(entry);
     }).pipe(
       Effect.catch(() => Effect.void),
       Effect.flatMap(() =>
@@ -444,6 +522,107 @@ export function makeBrokerRegistry(configuration: BrokerRegistryOptions = {}) {
       ),
     );
 
+  const scheduleIdle = (
+    entry: Entry,
+    factoryMap: Map<string, Entry>,
+    directory: string,
+    timeout: number,
+  ) =>
+    Effect.gen(function* () {
+      entry.idleUntil = new Date(now() + timeout).toISOString();
+      log(entry, "idle-scheduled");
+      yield* publish(entry, {
+        ...(entry.status ?? { phase: "idle", projectDirectory: directory as any, generation: 0 }),
+        phase: "idle",
+        idleUntil: entry.idleUntil,
+      });
+      entry.idleFiber = yield* Effect.sleep(Duration.millis(timeout)).pipe(
+        Effect.andThen(
+          Effect.gen(function* () {
+            if (entry.leases.size === 0 && !entry.disposed) {
+              entry.disposed = true;
+              const deferred = yield* Deferred.make<void>();
+              entry.closing = deferred;
+              yield* disposeLeaseEntry(entry, factoryMap, deferred).pipe(Effect.forkDetach);
+            }
+          }),
+        ),
+        Effect.forkIn(entry.scope),
+      );
+    });
+
+  const closeImmediately = (
+    entry: Entry,
+    factoryMap: Map<string, Entry>,
+    required: boolean,
+  ): Effect.Effect<Deferred.Deferred<void> | undefined> =>
+    Effect.gen(function* () {
+      if (!required) return undefined;
+      entry.disposed = true;
+      const deferred = yield* Deferred.make<void>();
+      entry.closing = deferred;
+      yield* disposeLeaseEntry(entry, factoryMap, deferred).pipe(Effect.forkDetach);
+      return deferred;
+    });
+
+  const releaseLease = (
+    entry: Entry,
+    factoryMap: Map<string, Entry>,
+    leaseID: symbol,
+    directory: string,
+    isReleased: () => boolean,
+    markReleased: () => void,
+  ) =>
+    lock.withPermit(
+      Effect.gen(function* () {
+        if (isReleased()) return undefined;
+        markReleased();
+        log(entry, "release");
+        entry.leases.delete(leaseID);
+        return yield* releaseAfterDelete(entry, factoryMap, directory);
+      }),
+    );
+
+  const releaseAfterDelete = (
+    entry: Entry,
+    factoryMap: Map<string, Entry>,
+    directory: string,
+  ): Effect.Effect<Deferred.Deferred<void> | undefined> =>
+    entry.leases.size !== 0 || entry.disposed
+      ? Effect.succeed(undefined)
+      : releaseLastLease(entry, factoryMap, directory);
+
+  const releaseLastLease = (
+    entry: Entry,
+    factoryMap: Map<string, Entry>,
+    directory: string,
+  ): Effect.Effect<Deferred.Deferred<void> | undefined> =>
+    Effect.gen(function* () {
+      const timeout = Number(
+        (entry.options.adapter as Record<string, unknown>).idleTimeoutMs ?? idleTimeoutMs,
+      );
+      const immediate = yield* closeImmediately(
+        entry,
+        factoryMap,
+        entry.failure !== undefined || timeout <= 0,
+      );
+      if (immediate) return immediate;
+      yield* scheduleIdle(entry, factoryMap, directory, timeout);
+      return undefined;
+    });
+
+  const reuseIdle = (entry: Entry) =>
+    Effect.gen(function* () {
+      if (!entry.idleFiber) return;
+      yield* Fiber.interrupt(entry.idleFiber);
+      entry.idleFiber = undefined;
+      entry.idleUntil = undefined;
+      entry.disposed = false;
+      if (entry.status?.phase === "idle")
+        yield* publish(entry, { ...entry.status, phase: "ready", idleUntil: undefined });
+      log(entry, "reused");
+    });
+
   const acquireAttempt = <R>(
     factory: ProjectKeyFerryManagerFactory<R>,
     options: ProjectKeyFerryManagerOptions,
@@ -455,8 +634,10 @@ export function makeBrokerRegistry(configuration: BrokerRegistryOptions = {}) {
         );
         const factoryMap = factories.get(factory as object) ?? new Map<string, Entry>();
         factories.set(factory as object, factoryMap);
+        factoryMaps.add(factoryMap);
         const entry = yield* getOrCreateEntry(factory, options, directory);
         if (entry.closing) return { waiting: entry.closing };
+        yield* reuseIdle(entry);
         const leaseID = Symbol();
         entry.leases.add(leaseID);
         if (!entry.startup && !entry.failure) {
@@ -474,18 +655,13 @@ export function makeBrokerRegistry(configuration: BrokerRegistryOptions = {}) {
             return yield* operation(entry!.manager!);
           });
         const release = Effect.gen(function* () {
-          const close = yield* lock.withPermit(
-            Effect.gen(function* () {
-              if (released) return undefined;
-              released = true;
-              entry!.leases.delete(leaseID);
-              if (entry!.leases.size !== 0 || entry!.disposed) return undefined;
-              entry!.disposed = true;
-              const deferred = yield* Deferred.make<void>();
-              entry!.closing = deferred;
-              yield* disposeLeaseEntry(entry!, factoryMap, deferred).pipe(Effect.forkDetach);
-              return deferred;
-            }),
+          const close = yield* releaseLease(
+            entry!,
+            factoryMap,
+            leaseID,
+            directory,
+            () => released,
+            () => (released = true),
           );
           if (close) yield* Deferred.await(close);
         });
@@ -671,8 +847,136 @@ export function makeBrokerRegistry(configuration: BrokerRegistryOptions = {}) {
       );
     });
 
-  return { acquire, retry, retryIfDue };
+  let unregisterOwnershipLogger: () => void = () => undefined;
+  const shutdown = Effect.uninterruptible(
+    Effect.gen(function* () {
+      removeHooksWhenConfigured(configuration.hostShutdownHooks);
+      const current = [...entries];
+      yield* Effect.forEach(current, (entry) => disposeEntry(entry), { concurrency: "unbounded" });
+      for (const map of factoryMaps) map.clear();
+      entries.clear();
+      unregisterOwnershipLogger();
+    }),
+  );
+
+  installHooksWhenConfigured(configuration.hostShutdownHooks, shutdown);
+  unregisterOwnershipLogger = setOwnershipLifecycleLogger((event) =>
+    configuration.logger?.({
+      ...event,
+      scope: "project",
+      directory: "" as any,
+      keyHash: event.keyHash,
+    } as BrokerLogEvent),
+  );
+  return { acquire, retry, retryIfDue, shutdown };
 }
 
-export const brokerRegistry = makeBrokerRegistry();
+let hostHooks: (() => void) | undefined;
+let hostShutdown: Effect.Effect<void> | undefined;
+export interface HostSignalProcess {
+  readonly pid: number;
+  readonly on: (event: any, listener: (...args: any[]) => void) => unknown;
+  readonly removeListener: (event: any, listener: (...args: any[]) => void) => unknown;
+  readonly listeners: (event: any) => Function[];
+  readonly kill: (pid: number, signal: "SIGINT" | "SIGTERM") => unknown;
+}
+function removeHooksWhenConfigured(enabled: boolean | undefined): void {
+  if (enabled) removeHostShutdownHooks();
+}
+function installHooksWhenConfigured(
+  enabled: boolean | undefined,
+  shutdown: Effect.Effect<void>,
+): void {
+  if (enabled) installHostShutdownHooks(shutdown);
+}
+function signalListener(
+  name: "SIGINT" | "SIGTERM",
+  onSigInt: () => void,
+  onSigTerm: () => void,
+): () => void {
+  return name === "SIGINT" ? onSigInt : onSigTerm;
+}
+function reraiseSignal(
+  signalProcess: HostSignalProcess,
+  name: "SIGINT" | "SIGTERM",
+  listener: () => void,
+): void {
+  signalProcess.removeListener(name, listener);
+  signalProcess.kill(signalProcess.pid, name);
+}
+function finishSignalCleanup(
+  signalProcess: HostSignalProcess,
+  name: "SIGINT" | "SIGTERM",
+  listener: () => void,
+  active: boolean,
+): void {
+  if (!active && signalProcess.listeners(name).length > 0) return;
+  const others = signalProcess.listeners(name).filter((item) => item !== listener);
+  signalProcess.removeListener(name, listener);
+  if (others.length === 0) signalProcess.kill(signalProcess.pid, name);
+}
+export function removeHostShutdownHooks(): void {
+  hostHooks?.();
+  hostHooks = undefined;
+  hostShutdown = undefined;
+}
+export function installHostShutdownHooks(
+  shutdown: Effect.Effect<void>,
+  signalProcess: HostSignalProcess = process,
+  options: { readonly cleanupTimeoutMs?: number } = {},
+): (() => void) | undefined {
+  if (hostHooks) return;
+  hostShutdown = shutdown;
+  let active = true;
+  const beforeExit = () => {
+    if (active) void Effect.runPromise(hostShutdown!).catch(() => undefined);
+  };
+  let cleaning = false;
+  // Node and Bun suppress their default signal termination while a signal
+  // listener is installed. Cleanup is bounded; `exit` cannot await work and
+  // is covered by the startup ownership reaper instead.
+  const boundedTimer = (resolve: () => void) => {
+    const timer = setTimeout(resolve, options.cleanupTimeoutMs ?? 3_000);
+    (timer as unknown as { unref?: () => void }).unref?.();
+    return timer;
+  };
+  const signal = (name: "SIGINT" | "SIGTERM") => {
+    if (!active) return;
+    const listener = signalListener(name, onSigInt, onSigTerm);
+    if (cleaning) {
+      reraiseSignal(signalProcess, name, listener);
+      return;
+    }
+    cleaning = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<void>((resolve) => {
+      timer = boundedTimer(resolve);
+    });
+    void Promise.race([Effect.runPromise(hostShutdown!).catch(() => undefined), timeout]).finally(
+      () => {
+        if (timer !== undefined) clearTimeout(timer);
+        // shutdown() removes the hooks at its start, so do not let that normal
+        // cleanup path suppress the signal re-raise requested by this handler.
+        finishSignalCleanup(signalProcess, name, listener, active);
+      },
+    );
+  };
+  const onSigInt = () => signal("SIGINT");
+  const onSigTerm = () => signal("SIGTERM");
+  signalProcess.on("beforeExit", beforeExit);
+  signalProcess.on("SIGINT", onSigInt);
+  signalProcess.on("SIGTERM", onSigTerm);
+  hostHooks = () => {
+    active = false;
+    signalProcess.removeListener("beforeExit", beforeExit);
+    signalProcess.removeListener("SIGINT", onSigInt);
+    signalProcess.removeListener("SIGTERM", onSigTerm);
+  };
+  return hostHooks;
+}
+
+export const brokerRegistry = makeBrokerRegistry({
+  idleTimeoutMs: 600_000,
+  hostShutdownHooks: true,
+});
 export type BrokerRegistry = ReturnType<typeof makeBrokerRegistry>;

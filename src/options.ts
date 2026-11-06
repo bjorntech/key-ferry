@@ -32,6 +32,7 @@ export interface VarlockAdapterOptions {
   readonly reloadTimeoutMs: number;
   readonly pollIntervalMs: number;
   readonly requireStrictEgress: boolean;
+  readonly idleTimeoutMs?: number;
   readonly allowPrivateNetwork: boolean;
   readonly servers: Readonly<Record<string, ServerProtection>>;
   /** @deprecated Use reloadTimeoutMs. Kept as a non-enumerable compatibility view. */
@@ -60,6 +61,7 @@ const DEFAULT_STARTUP_TIMEOUT_MS = 30_000;
 const DEFAULT_COMMAND_TIMEOUT_MS = 10_000;
 const DEFAULT_RELOAD_TIMEOUT_MS = 30_000;
 const DEFAULT_POLL_INTERVAL_MS = 100;
+const DEFAULT_IDLE_TIMEOUT_MS = 600_000;
 const MAX_TIMEOUT_MS = 10 * 60 * 1_000;
 const MAX_RELOAD_TIMEOUT_MS = 15 * 60 * 1_000;
 const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
@@ -255,6 +257,20 @@ function readTimeout(
   return value === undefined ? fallback : positiveInteger(value, name, maximum);
 }
 
+function readIdleTimeout(input: Record<string, unknown>): number {
+  const value = input.idleTimeoutMs;
+  if (value === undefined) return DEFAULT_IDLE_TIMEOUT_MS;
+  if (invalidIdleTimeout(value))
+    throw new TypeError("idleTimeoutMs must be a non-negative integer no greater than 600000");
+  return value as number;
+}
+
+function invalidIdleTimeout(value: unknown): boolean {
+  return (
+    typeof value !== "number" || !Number.isSafeInteger(value) || value < 0 || value > MAX_TIMEOUT_MS
+  );
+}
+
 function normalizeReloadTimeout(input: Record<string, unknown>): number {
   const usesLegacyName =
     input.reloadTimeoutMs === undefined && input.refreshTimeoutMs !== undefined;
@@ -291,6 +307,7 @@ function normalizeAdapter(input: Record<string, unknown>): VarlockAdapterOptions
   const reloadTimeoutMs = normalizeReloadTimeout(input);
   const pollIntervalMs = readTimeout(input, "pollIntervalMs", DEFAULT_POLL_INTERVAL_MS, 10_000);
   const requireStrictEgress = readBoolean(input, "requireStrictEgress", true);
+  const idleTimeoutMs = readIdleTimeout(input);
   const allowPrivateNetwork = readBoolean(input, "allowPrivateNetwork", false);
   const adapter = {
     command,
@@ -299,6 +316,7 @@ function normalizeAdapter(input: Record<string, unknown>): VarlockAdapterOptions
     reloadTimeoutMs,
     pollIntervalMs,
     requireStrictEgress,
+    ...(Object.hasOwn(input, "idleTimeoutMs") ? { idleTimeoutMs } : {}),
     allowPrivateNetwork,
     servers: normalizeServers(input),
   } as unknown as VarlockAdapterOptions;
@@ -400,6 +418,9 @@ export function managerOptions(
       reloadTimeoutMs: options.adapter.reloadTimeoutMs,
       pollIntervalMs: options.adapter.pollIntervalMs,
       requireStrictEgress: options.adapter.requireStrictEgress,
+      ...(options.adapter.idleTimeoutMs === undefined
+        ? {}
+        : { idleTimeoutMs: options.adapter.idleTimeoutMs }),
     },
   };
 }

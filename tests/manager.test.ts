@@ -292,6 +292,22 @@ test("starts lazily, returns only placeholder-backed requested keys, and dispose
   assert.deepEqual(fake.stops, [9001]);
 });
 
+test("dispose uses the captured proxy session UUID before stopping the process", async () => {
+  const fake = fakeProcess();
+  await inManager(fake, (manager) =>
+    Effect.gen(function* () {
+      yield* manager.ensureStarted;
+      yield* manager.dispose;
+      yield* manager.dispose;
+    }),
+  );
+  assert.equal(
+    fake.runs.filter((args) => args.join(" ") === "proxy stop --session session-1").length,
+    1,
+  );
+  assert.deepEqual(fake.stops, [9001]);
+});
+
 test("atomically ensures readiness and returns the matching environment", async () => {
   const fake = fakeProcess();
   const result = await inManager(fake, (manager) => manager.ensureReady);

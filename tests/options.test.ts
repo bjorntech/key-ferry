@@ -60,6 +60,9 @@ describe("plugin options", () => {
   });
 
   test("rejects unbounded or malformed configuration", () => {
+    expect(parseOptions({ idleTimeoutMs: 0 }).adapter.idleTimeoutMs).toBe(0);
+    expect(() => parseOptions({ idleTimeoutMs: -1 })).toThrow();
+    expect(() => parseOptions({ idleTimeoutMs: 600_001 })).toThrow();
     expect(() => parseOptions({ refreshTimeoutMs: 900_001 })).toThrow();
     expect(() => parseOptions({ servers: null })).toThrow("servers must be an object");
     expect(() => parseOptions({ servers: { tools: { env: [] } } })).toThrow();

@@ -54,6 +54,8 @@ describe("safe Varlock RPC data", () => {
   test("maps every supported failure code to a stable public message", () => {
     const messages = {
       invalid_config: "Varlock configuration is invalid",
+      ownership_unavailable:
+        "Key Ferry could not secure its private runtime directory; see doctor.",
       start_failed: "Varlock could not start",
       refresh_failed: "Varlock refresh failed",
       timeout: "Varlock operation timed out",
@@ -71,6 +73,33 @@ describe("safe Varlock RPC data", () => {
       expect(publicMessage(error)).toBe(message);
       expect(rpcError(error)).toEqual({ code });
     }
+  });
+
+  test("sanitizes ownership_unavailable for doctor/status clients", () => {
+    const status = sanitizeStatus({
+      phase: "failed",
+      projectDirectory: projectDirectory("/project"),
+      generation: 1,
+      error: new VarlockError({
+        code: "ownership_unavailable",
+        message: "private path details",
+        retryable: false,
+      }),
+    });
+    expect(status.error?.code).toBe("ownership_unavailable");
+    expect(status.error?.message).toBe(
+      "Key Ferry could not secure its private runtime directory; see doctor.",
+    );
+    expect(status.error?.retryable).toBe(false);
+    expect(
+      rpcError(
+        new VarlockError({
+          code: "ownership_unavailable",
+          message: "private path details",
+          retryable: false,
+        }),
+      ),
+    ).toEqual({ code: "ownership_unavailable" });
   });
 
   test("normalizes unknown error codes and retains safe metadata", () => {

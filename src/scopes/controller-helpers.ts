@@ -78,6 +78,7 @@ export function groupStatus(
     phase: status.phase,
     generation: status.generation,
     ...optionalStatusFields(status),
+    ...(status.idleUntil === undefined ? {} : { idleUntil: status.idleUntil }),
     ...(diagnostics.length === 0 ? {} : { diagnostics }),
     ...(activation === undefined ? {} : { activation }),
   };
@@ -260,6 +261,7 @@ export function aggregatePhase(
   const active = scopes.filter((item) => item.activation !== "awaiting_activation");
   const unstable = active.some((item) => item.phase === "failed" || item.phase === "starting");
   if (unstable) return active.some((item) => item.phase === "ready") ? "degraded" : base;
+  if (active.length > 0 && active.every((item) => item.phase === "idle")) return "idle";
   return active.every((item) => item.phase === "ready") ? "ready" : base;
 }
 
@@ -352,6 +354,7 @@ function safeFields(status: SafeScopeStatus): Partial<SafeStatus> {
       nextRetryAt: status.nextRetryAt,
       error: status.error,
       diagnostics: status.diagnostics,
+      idleUntil: status.idleUntil,
     }).filter(([, value]) => value !== undefined),
   ) as Partial<SafeStatus>;
 }
@@ -370,6 +373,7 @@ export function statusBase(
       projectDirectory: project.projectDirectory,
       generation: project.generation,
       ...(project.error === undefined ? {} : { error: project.error }),
+      ...(project.idleUntil === undefined ? {} : { idleUntil: project.idleUntil }),
     };
   return { phase: "stopped", projectDirectory: configuration.global.sourceRoot, generation: 0 };
 }
