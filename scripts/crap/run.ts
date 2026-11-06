@@ -53,24 +53,26 @@ function runBun(
   cwd: string,
   args: string[],
   quiet: boolean,
-): Promise<{ code: number; output: string }> {
+): Promise<{ code: number; signal: NodeJS.Signals | null; output: string }> {
   return new Promise((resolveExit, reject) => {
     const child = spawn(process.execPath, ["test", ...args], {
       cwd,
-      stdio: quiet ? ["ignore", "pipe", "pipe"] : "inherit",
+      stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env, CRAP_REPO_ROOT: root, VARLOCK_LIVE_BINARY: "" },
     });
     let output = "";
-    if (quiet) {
-      child.stdout?.on("data", (chunk) => {
-        output += String(chunk);
-      });
-      child.stderr?.on("data", (chunk) => {
-        output += String(chunk);
-      });
-    }
+    child.stdout?.on("data", (chunk) => {
+      const text = String(chunk);
+      output += text;
+      if (!quiet) process.stdout.write(text);
+    });
+    child.stderr?.on("data", (chunk) => {
+      const text = String(chunk);
+      output += text;
+      if (!quiet) process.stderr.write(text);
+    });
     child.on("error", reject);
-    child.on("exit", (code) => resolveExit({ code: code ?? 1, output }));
+    child.on("exit", (code, signal) => resolveExit({ code: code ?? 1, signal, output }));
   });
 }
 
@@ -108,8 +110,12 @@ async function main(): Promise<void> {
       [...(testArgs.length ? testArgs : ["tests"])],
       process.env.CRAP_JSON === "1" || process.argv.includes("--json"),
     );
-    if (testRun.code !== 0)
-      throw new Error(`instrumented Bun tests failed with exit code ${testRun.code}`);
+    if (testRun.code !== 0) {
+      const tail = testRun.output.split("\n").slice(-40).join("\n").trim();
+      throw new Error(
+        `instrumented Bun tests failed with exit code ${testRun.code}; signal=${testRun.signal ?? "none"}\n${tail || "(no child output)"}`,
+      );
+    }
     const coverage: Record<string, any> = {};
     const snapshots = (await readdir(temp)).filter((file) => /^\.crap-\d+\.json$/.test(file));
     if (!snapshots.length)
