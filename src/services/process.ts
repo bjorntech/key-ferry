@@ -74,6 +74,16 @@ const error = (
   extra: Partial<Pick<ProcessError, "exitCode" | "signal">> = {},
 ) => new ProcessError({ phase, code, message: safeMessage(phase, code), ...extra });
 
+const exitFailure = (code: number | null, signal: NodeJS.Signals | null, stderr: string) =>
+  new ProcessError({
+    phase: "exit",
+    code: code === null ? "signal" : "non-zero",
+    message: safeMessage("exit", code === null ? "signal" : "non-zero"),
+    exitCode: code ?? undefined,
+    signal: signal ?? undefined,
+    stderr,
+  });
+
 type OwnedProcess = {
   readonly child: ChildProcess;
   groupId: number | undefined;
@@ -335,16 +345,7 @@ const run = (input: RunInput): Effect.Effect<RunResult, ProcessError> => {
     const closeResult = (code: number | null, sig: NodeJS.Signals | null) => {
       if (limited) return Effect.fail(error("capture-limit", "capture-limit"));
       if (code === 0) return Effect.succeed({ code, signal: sig, stdout, stderr });
-      return Effect.fail(
-        new ProcessError({
-          phase: "exit",
-          code: code === null ? "signal" : "non-zero",
-          message: safeMessage("exit", code === null ? "signal" : "non-zero"),
-          exitCode: code ?? undefined,
-          signal: sig ?? undefined,
-          stderr,
-        }),
-      );
+      return Effect.fail(exitFailure(code, sig, stderr));
     };
     const finishClose = (code: number | null, sig: NodeJS.Signals | null) => {
       if (settled) return;

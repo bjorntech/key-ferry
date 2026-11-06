@@ -155,8 +155,11 @@ export function makeScopedController(options: ScopedControllerOptions) {
       projectDirectory: runtime.group.sourceRoot,
       generation: runtime.status?.generation ?? 0,
       lastFailureAt: failureAt,
-      ...(nextRetryAt ? { nextRetryAt } : {}),
-      ...(runtime.status?.pid === undefined ? {} : { pid: runtime.status.pid }),
+      ...Object.fromEntries(
+        Object.entries({ nextRetryAt, pid: runtime.status?.pid }).filter(
+          ([, value]) => value !== undefined,
+        ),
+      ),
       error: failure,
     };
     runtime.state = emptyProtectionState();
@@ -171,17 +174,18 @@ export function makeScopedController(options: ScopedControllerOptions) {
       if (!runtime.active) return;
       runtime.epoch += 1;
       const previous = runtime.status;
+      const retained = failedStatus ?? (phase === "failed" ? previous : undefined);
       runtime.status = {
         phase,
         projectDirectory: runtime.group.sourceRoot,
         generation: runtime.status?.generation ?? 0,
-        ...(previous?.error === undefined ? {} : { error: previous.error }),
-        ...((failedStatus ?? (phase === "failed" ? previous : undefined))?.lastFailureAt
-          ? { lastFailureAt: (failedStatus ?? previous)!.lastFailureAt }
-          : {}),
-        ...((failedStatus ?? (phase === "failed" ? previous : undefined))?.nextRetryAt
-          ? { nextRetryAt: (failedStatus ?? previous)!.nextRetryAt }
-          : {}),
+        ...Object.fromEntries(
+          Object.entries({
+            error: previous?.error,
+            lastFailureAt: retained?.lastFailureAt,
+            nextRetryAt: retained?.nextRetryAt,
+          }).filter(([, value]) => value !== undefined),
+        ),
       };
       runtime.state = emptyProtectionState();
       yield* runtime.remote.stopAll;

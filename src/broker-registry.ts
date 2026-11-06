@@ -71,6 +71,10 @@ type Entry = {
   contextKey: string;
 };
 
+function retryPending(entry: Entry): { pending: NonNullable<Entry["attempt"]> } | undefined {
+  return entry.attempt && entry.attemptPending ? { pending: entry.attempt } : undefined;
+}
+
 const adapterKeys = new Set([
   "command",
   "environmentKeys",
@@ -259,6 +263,18 @@ export function makeBrokerRegistry(configuration: BrokerRegistryOptions = {}) {
     entry.retryBatch = undefined;
   };
 
+  const capacityFailure = () => Effect.die(new Error("broker registry capacity reached"));
+
+  const disposeStaleEntries = (factoryMap: Map<string, Entry>, contextKey: string) =>
+    Effect.gen(function* () {
+      for (const [oldKey, oldEntry] of factoryMap) {
+        if (oldEntry.contextKey !== contextKey || oldEntry.leases.size > 0) continue;
+        yield* Scope.close(oldEntry.scope, Exit.void).pipe(Effect.ignore);
+        entries.delete(oldEntry);
+        factoryMap.delete(oldKey);
+      }
+    });
+
   const start = (entry: Entry): Effect.Effect<BrokerResult, VarlockError> => {
     const operation: Effect.Effect<BrokerResult, VarlockError, any> = Effect.gen(function* () {
       const context = yield* Layer.build(entry.factory.layer(entry.options)).pipe(
@@ -369,8 +385,7 @@ export function makeBrokerRegistry(configuration: BrokerRegistryOptions = {}) {
       factories.set(factory as object, factoryMap);
       const existing = factoryMap.get(key);
       if (existing) return existing;
-      if (entries.size >= maxEntries)
-        return yield* Effect.die(new Error("broker registry capacity reached"));
+      if (entries.size >= maxEntries) return yield* capacityFailure();
       const entry: Entry = {
         key,
         options: {
@@ -387,12 +402,7 @@ export function makeBrokerRegistry(configuration: BrokerRegistryOptions = {}) {
         failureCount: 0,
         contextKey: identity.contextKey,
       };
-      for (const [oldKey, oldEntry] of factoryMap) {
-        if (oldEntry.contextKey !== identity.contextKey || oldEntry.leases.size > 0) continue;
-        yield* Scope.close(oldEntry.scope, Exit.void).pipe(Effect.ignore);
-        entries.delete(oldEntry);
-        factoryMap.delete(oldKey);
-      }
+      yield* disposeStaleEntries(factoryMap, identity.contextKey);
       factoryMap.set(key, entry);
       entries.add(entry);
       return entry;
@@ -604,8 +614,9 @@ export function makeBrokerRegistry(configuration: BrokerRegistryOptions = {}) {
         }),
       );
     if (entry.closing) return Effect.succeed({ waiting: entry.closing });
-    if (entry.attempt && entry.attemptPending) return Effect.succeed({ pending: entry.attempt });
-    if (!entry.failure) {
+    const pending = retryPending(entry);
+    if (pending) return Effect.succeed(pending);
+    if (!entry.failure)
       return Effect.fail(
         new VarlockError({
           code: "not_ready",
@@ -613,7 +624,6 @@ export function makeBrokerRegistry(configuration: BrokerRegistryOptions = {}) {
           retryable: false,
         }),
       );
-    }
     return Effect.gen(function* () {
       // The previous attempt is complete (attemptPending was checked above),
       // so closing its scope cannot race a startup. This runs manager and

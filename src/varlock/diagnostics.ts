@@ -27,25 +27,20 @@ export function classifyStderr(stderr: string | undefined): {
   readonly message: string;
 } {
   const value = stderr ?? "";
-  let code: VarlockStderrCode = "unknown";
-  if (/dismiss|cancel|declin|reject.*prompt|prompt.*(?:close|dismiss)/i.test(value))
-    code = "op_prompt_dismissed";
-  else if (/not signed in|not logged in|sign in to 1password/i.test(value))
-    code = "op_not_signed_in";
-  else if (/authentication failed|auth failed|invalid credentials|unauthorized/i.test(value))
-    code = "op_auth_failed";
-  else if (
-    /BAD_VAULT_REFERENCE|bad vault|vault.*(?:not found|invalid)|account.*(?:not found|invalid)/i.test(
-      value,
-    )
-  )
-    code = "op_bad_vault_reference";
-  else if (/multiple different 1password accounts|batching enabled/i.test(value))
-    code = "op_multiple_accounts_app_auth";
-  else if (/command not found|enoent|could not find.*(?:varlock|op)/i.test(value))
-    code = "op_not_found";
-  else if (/schema|validation|parse error/i.test(value)) code = "varlock_schema_error";
-  else if (/timed out|timeout/i.test(value)) code = "varlock_timeout";
+  const matchers: readonly (readonly [RegExp, VarlockStderrCode])[] = [
+    [/dismiss|cancel|declin|reject.*prompt|prompt.*(?:close|dismiss)/i, "op_prompt_dismissed"],
+    [/not signed in|not logged in|sign in to 1password/i, "op_not_signed_in"],
+    [/authentication failed|auth failed|invalid credentials|unauthorized/i, "op_auth_failed"],
+    [
+      /BAD_VAULT_REFERENCE|bad vault|vault.*(?:not found|invalid)|account.*(?:not found|invalid)/i,
+      "op_bad_vault_reference",
+    ],
+    [/multiple different 1password accounts|batching enabled/i, "op_multiple_accounts_app_auth"],
+    [/command not found|enoent|could not find.*(?:varlock|op)/i, "op_not_found"],
+    [/schema|validation|parse error/i, "varlock_schema_error"],
+    [/timed out|timeout/i, "varlock_timeout"],
+  ];
+  const code = matchers.find(([pattern]) => pattern.test(value))?.[1] ?? "unknown";
   return { code, message: messages[code] };
 }
 

@@ -344,14 +344,16 @@ export function selectedStatus(
 }
 
 function safeFields(status: SafeScopeStatus): Partial<SafeStatus> {
-  return {
-    ...(status.pid === undefined ? {} : { pid: status.pid }),
-    ...(status.lastRefreshAt === undefined ? {} : { lastRefreshAt: status.lastRefreshAt }),
-    ...(status.lastFailureAt === undefined ? {} : { lastFailureAt: status.lastFailureAt }),
-    ...(status.nextRetryAt === undefined ? {} : { nextRetryAt: status.nextRetryAt }),
-    ...(status.error === undefined ? {} : { error: status.error }),
-    ...(status.diagnostics === undefined ? {} : { diagnostics: status.diagnostics }),
-  };
+  return Object.fromEntries(
+    Object.entries({
+      pid: status.pid,
+      lastRefreshAt: status.lastRefreshAt,
+      lastFailureAt: status.lastFailureAt,
+      nextRetryAt: status.nextRetryAt,
+      error: status.error,
+      diagnostics: status.diagnostics,
+    }).filter(([, value]) => value !== undefined),
+  ) as Partial<SafeStatus>;
 }
 
 export function statusBase(
