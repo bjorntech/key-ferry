@@ -172,9 +172,13 @@ test("config watch backs off persistent apply failures and retries a new fingerp
         let previous = 0;
         let lastAFailureAt = 0;
         for (const retryTime of retryTimes) {
-          yield* stepWatch(events!, retryTime - previous, 2);
+          yield* stepWatch(events!, retryTime - previous, 1);
           previous = retryTime;
           lastAFailureAt = yield* Clock.currentTimeMillis;
+        }
+        for (let i = 0; i < 100; i++) {
+          yield* Effect.yieldNow;
+          while (Option.isSome(yield* Queue.poll(events!))) yield* Effect.yieldNow;
         }
         const beforeChange = applies;
         assert.ok(beforeChange >= 15 && beforeChange <= 17);
