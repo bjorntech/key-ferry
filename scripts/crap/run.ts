@@ -111,7 +111,7 @@ async function main(): Promise<void> {
       process.env.CRAP_JSON === "1" || process.argv.includes("--json"),
     );
     if (testRun.code !== 0) {
-      const tail = testRun.output.split("\n").slice(-200).join("\n").trim();
+      const tail = testRun.output.split("\n").slice(-1000).join("\n").trim();
       throw new Error(
         `instrumented Bun tests failed with exit code ${testRun.code}; signal=${testRun.signal ?? "none"}\n${tail || "(no child output)"}`,
       );

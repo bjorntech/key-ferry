@@ -70,8 +70,9 @@ test("config watch retains a sanitized load failure and continues after a valid 
   let loads = 0;
   let nextConfigurationReady = false;
   let events: Queue.Queue<WatchEvent> | undefined;
+  let watching = false;
   const signal = (event: WatchEvent) => {
-    if (events) Effect.runSync(Queue.offer(events, event));
+    if (watching && events) Effect.runSync(Queue.offer(events, event));
   };
   const scope = await Effect.runPromise(Scope.make());
   const controller = makeScopedController({
@@ -86,6 +87,7 @@ test("config watch retains a sanitized load failure and continues after a valid 
   await Effect.runPromise(controller.start);
   events = await Effect.runPromise(Queue.unbounded<WatchEvent>());
   const program = Effect.gen(function* () {
+    watching = true;
     const watch = yield* controller.watch(async () => {
       loads++;
       signal({ type: "load", tick: loads });
@@ -131,8 +133,9 @@ test("config watch backs off persistent apply failures and retries a new fingerp
   let applies = 0;
   let failApply = true;
   let events: Queue.Queue<WatchEvent> | undefined;
+  let watching = false;
   const signal = (event: WatchEvent) => {
-    if (events) Effect.runSync(Queue.offer(events, event));
+    if (watching && events) Effect.runSync(Queue.offer(events, event));
   };
   const configurations = { A: aConfiguration, B: nextConfiguration };
   const scope = await Effect.runPromise(Scope.make());
@@ -159,6 +162,7 @@ test("config watch backs off persistent apply failures and retries a new fingerp
       Effect.gen(function* () {
         // start may finish its initial reconciliation on the next scheduler turn.
         yield* Effect.yieldNow;
+        watching = true;
         const watch = yield* controller.watch(async () => {
           loads++;
           signal({ type: "load", tick: loads });
