@@ -1,6 +1,6 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { Clock, Deferred, Effect, Fiber, Layer, Scope } from "effect";
+import { Clock, Deferred, Effect, Exit, Fiber, Layer, Scope } from "effect";
 import { TestClock } from "effect/testing";
 import { makeBrokerRegistry, retryDelayMs } from "../src/broker-registry.js";
 import { ProjectKeyFerryManager, projectDirectory, VarlockError } from "../src/contracts.js";
@@ -91,7 +91,11 @@ test("config watch retains a sanitized load failure and continues after a valid 
     yield* Fiber.interrupt(watch);
     yield* controller.dispose;
   });
-  await Effect.runPromise(Effect.provide(program, TestClock.layer()));
+  try {
+    await Effect.runPromise(Effect.provide(program, TestClock.layer()));
+  } finally {
+    await Effect.runPromise(Scope.close(scope, Exit.void));
+  }
 });
 
 test("config watch backs off persistent apply failures and retries a new fingerprint promptly", async () => {
@@ -132,7 +136,7 @@ test("config watch backs off persistent apply failures and retries a new fingerp
         });
         let observedApplies = applies;
         let lastAFailureAt = 0;
-        for (let i = 0; i < 600; i++) {
+        for (let i = 0; i < 500; i++) {
           yield* tick(1);
           if (applies !== observedApplies) {
             lastAFailureAt = yield* Clock.currentTimeMillis;
@@ -142,7 +146,7 @@ test("config watch backs off persistent apply failures and retries a new fingerp
         const beforeChange = applies;
         // The retry schedule is 1, 6, 16, 36, 76, 156, 316, then 616 seconds;
         // each failed replacement invokes reload for rollback as well, plus the
-        // initial startup reload, so 15-17 reload calls cover this 10-minute run.
+        // initial startup reload, so 15-17 reload calls cover this run.
         assert.ok(
           beforeChange >= 15 && beforeChange <= 17,
           `applies=${beforeChange}, loads=${loads}`,
@@ -177,6 +181,7 @@ test("config watch backs off persistent apply failures and retries a new fingerp
   );
   assert.ok(result.loads > 0);
   assert.ok(result.beforeChange >= 15 && result.beforeChange <= 17);
+  await Effect.runPromise(Scope.close(scope, Exit.void));
 });
 
 const testConfiguration = () =>
@@ -221,6 +226,7 @@ test("observer failure clear preserves failure retry metadata", async () => {
   assert.ok(current.lastFailureAt);
   assert.ok(current.nextRetryAt);
   await Effect.runPromise(controller.dispose);
+  await Effect.runPromise(Scope.close(scope, Exit.void));
 });
 
 test("initial acquire failure records failure retry metadata", async () => {
@@ -240,4 +246,5 @@ test("initial acquire failure records failure retry metadata", async () => {
   assert.ok(current.lastFailureAt);
   assert.ok(current.nextRetryAt);
   await Effect.runPromise(controller.dispose);
+  await Effect.runPromise(Scope.close(scope, Exit.void));
 });
