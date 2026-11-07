@@ -625,15 +625,31 @@ async function removeInactiveRecord(
   verifier: OwnershipVerifier,
   ops: OwnershipFileOps,
 ): Promise<void> {
-  if (await sessionGone(record.sessionUuid, verifier)) {
-    const ledger = await readProxyLedger(ops, ops.ledgerPath);
-    const entry = ledger.find((item) => item.sessionUuid === record.sessionUuid);
-    if (entry) await retireProxyLedgerEntry(entry, ops).catch(() => undefined);
-  }
+  await retireInactiveLedger(record, verifier, ops);
   await removeOwnershipRecord(record.brokerKeyHash, ops);
   lifecycleLoggers.forEach((l) =>
     l({ event: "stale-reaped", keyHash: record.brokerKeyHash.slice(0, 12), directory: record.cwd }),
   );
+}
+
+async function retireInactiveLedger(
+  record: BrokerOwnershipRecord,
+  verifier: OwnershipVerifier,
+  ops: OwnershipFileOps,
+): Promise<void> {
+  if (await sessionGone(record.sessionUuid, verifier)) {
+    const ledger = await readProxyLedger(ops, ops.ledgerPath);
+    await retireLedgerEntry(ledger, record.sessionUuid, ops);
+  }
+}
+
+async function retireLedgerEntry(
+  ledger: ProxyLedgerEntry[],
+  sessionUuid: string,
+  ops: OwnershipFileOps,
+): Promise<void> {
+  const entry = ledger.find((item) => item.sessionUuid === sessionUuid);
+  if (entry) await retireProxyLedgerEntry(entry, ops).catch(() => undefined);
 }
 
 async function reapOwnedRecord(
@@ -678,6 +694,46 @@ async function waitForReapAttempt(attempt: number): Promise<void> {
   if (attempt + 1 < REAP_VERIFY_ATTEMPTS)
     await new Promise((resolve) => setTimeout(resolve, REAP_VERIFY_DELAY_MS));
 }
+
+function normalizeProxyStatus(parsed: any) {
+  const sessions = proxyStatusSessions(parsed);
+  return sessions.map((session: any) => ({
+    ...session,
+    keyFerryMarker: session.env?.KEY_FERRY_PROXY_MARKER,
+    pid: session.ownerPid,
+    startTime: session.startedAt,
+  }));
+}
+
+function proxyStatusSessions(parsed: any): any[] {
+  return Array.isArray(parsed) ? parsed : proxyStatusFallback(parsed);
+}
+function proxyStatusFallback(parsed: any): any[] {
+  return parsed.sessions ?? [];
+}
+
+async function readProcessEnvironment(
+  pid: number,
+): Promise<Readonly<Record<string, string>> | undefined> {
+  try {
+    const result = await exec(...processEnvironmentCommand(pid), { timeout: 2_000 });
+    return parseProcessMarker(result.stdout);
+  } catch {
+    return undefined;
+  }
+}
+
+function processEnvironmentCommand(pid: number): [string, string[]] {
+  return process.platform === "darwin"
+    ? ["ps", ["-Eww", "-p", String(pid), "-o", "command="]]
+    : ["sh", ["-c", `tr '\0' ' ' < /proc/${pid}/environ`]];
+}
+
+function parseProcessMarker(stdout: string): Readonly<Record<string, string>> {
+  const marker = stdout.match(/(?:^|\s)KEY_FERRY_PROXY_MARKER=([^\s]+)/)?.[1];
+  return marker === undefined ? {} : { KEY_FERRY_PROXY_MARKER: marker };
+}
+
 export function reapStaleOwnershipRecords(
   command: string | readonly string[] = "varlock",
   ops: OwnershipFileOps = files,
@@ -691,17 +747,7 @@ export function reapStaleOwnershipRecords(
       const result = await exec(executable, ["proxy", "status", "--format", "json"], {
         timeout: 2_000,
       });
-      const parsed = JSON.parse(result.stdout);
-      const sessions = Array.isArray(parsed) ? parsed : (parsed.sessions ?? []);
-      return sessions.map((session: any) => ({
-        ...session,
-        // Varlock 1.23 includes the proxy environment in status JSON.  Do
-        // not infer ownership from cwd/PPID; only this explicit marker is
-        // accepted for the recordless safety pass.
-        keyFerryMarker: session.env?.KEY_FERRY_PROXY_MARKER,
-        pid: session.ownerPid,
-        startTime: session.startedAt,
-      }));
+      return normalizeProxyStatus(JSON.parse(result.stdout));
     },
     stop: async (record) => {
       await exec(executable, ["proxy", "stop", "--session", record.sessionUuid], {
@@ -726,24 +772,7 @@ export function reapStaleOwnershipRecords(
         return undefined;
       }
     },
-    processEnv: async (pid) => {
-      try {
-        // `ps -E` is available on macOS; on Linux use /proc when present.
-        const result = await exec(
-          process.platform === "darwin" ? "ps" : "sh",
-          process.platform === "darwin"
-            ? ["-Eww", "-p", String(pid), "-o", "command="]
-            : ["-c", `tr '\0' ' ' < /proc/${pid}/environ`],
-          { timeout: 2_000 },
-        );
-        const marker = result.stdout.match(/(?:^|\s)KEY_FERRY_PROXY_MARKER=([^\s]+)/)?.[1];
-        return marker === undefined
-          ? ({} as Readonly<Record<string, string>>)
-          : { KEY_FERRY_PROXY_MARKER: marker };
-      } catch {
-        return undefined;
-      }
-    },
+    processEnv: (pid) => readProcessEnvironment(pid),
     command: async (pid) => {
       try {
         const result = await exec("ps", ["-o", "command=", "-p", String(pid)], {
