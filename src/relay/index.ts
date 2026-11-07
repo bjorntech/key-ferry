@@ -424,7 +424,7 @@ const start = (
             ),
             target,
           ),
-          req.method === "GET" || req.method === "HEAD" ? undefined : body,
+          requestBody(req.method, body),
           config.connectTimeoutMs ?? connectDefault,
           config.idleTimeoutMs ?? idleDefault,
           controller.signal,
@@ -434,6 +434,8 @@ const start = (
         });
         await writeRelayResponse(res, upstreamResponse, controller.signal);
       };
+      const requestBody = (method: string | undefined, body: PassThrough) =>
+        method === "GET" || method === "HEAD" ? undefined : body;
       const writeRelayResponse = async (
         res: ServerResponse,
         upstreamResponse: {

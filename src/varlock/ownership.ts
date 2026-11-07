@@ -112,14 +112,17 @@ function applyLedgerLine(line: string, entries: Map<string, ProxyLedgerEntry>): 
 }
 
 function isLedgerEntry(value: any): value is ProxyLedgerEntry {
+  return value?.version === 1 && validLedgerIdentity(value) && validLedgerMetadata(value);
+}
+function validLedgerIdentity(value: any): boolean {
   return (
-    value?.version === 1 &&
     typeof value.sessionUuid === "string" &&
     Number.isSafeInteger(value.proxyPid) &&
-    Number.isSafeInteger(value.ownerPid) &&
-    typeof value.cwd === "string" &&
-    typeof value.created === "string"
+    Number.isSafeInteger(value.ownerPid)
   );
+}
+function validLedgerMetadata(value: any): boolean {
+  return typeof value.cwd === "string" && typeof value.created === "string";
 }
 
 async function retireProxyLedgerEntry(
