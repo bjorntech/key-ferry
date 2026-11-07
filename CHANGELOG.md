@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.16 — 2026-11-07
+
+### Fixed
+
+- Coalesce concurrent manager health checks so shared broker scopes do not issue
+  duplicate status requests.
+
+- Clear completed ownership reaper passes so a later pass is not replaced by a
+  stale in-flight result. Version 0.1.15 was tagged but
+  never published to npm; 0.1.16 is the first published release containing
+  the 0.1.15 changes.
+
 ## 0.1.15 — 2026-11-07
 
 ### Fixed
