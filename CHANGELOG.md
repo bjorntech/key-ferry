@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.17 — 2026-11-07
+
+### Fixed
+
+- Return ownership records in deterministic creation-time and session-UUID
+  order regardless of filesystem directory enumeration. Versions 0.1.15 and
+  0.1.16 were tagged but never published to npm.
+
 ## 0.1.16 — 2026-11-07
 
 ### Fixed

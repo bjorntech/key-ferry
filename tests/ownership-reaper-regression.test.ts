@@ -136,6 +136,26 @@ describe("ownership reaper regressions", () => {
     }
   });
 
+  test("sorts ownership records independently of directory enumeration order", async () => {
+    const { root, ops } = await fixture();
+    try {
+      const live = record("b".repeat(64));
+      const reused = { ...record("c".repeat(64)), starterPid: 43 };
+      await writeOwnershipRecord(live, ops);
+      await writeOwnershipRecord(reused, ops);
+      const reversedOps = {
+        ...ops,
+        readdir: async (directory: string) => (await ops.readdir(directory)).reverse(),
+      };
+      expect((await readOwnershipRecords(reversedOps)).map((item) => item.sessionUuid)).toEqual([
+        live.sessionUuid,
+        reused.sessionUuid,
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("only reaps a recordless session with an explicit marker", async () => {
     const { root, ops } = await fixture();
     try {
