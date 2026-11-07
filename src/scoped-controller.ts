@@ -233,13 +233,20 @@ export function makeScopedController(options: ScopedControllerOptions) {
           ? {}
           : { diagnostics: runtime.remote.diagnostics }),
       };
+      yield* completeReconcile(runtime, status, environment, expectedEpoch);
+    });
+
+  const completeReconcile = (
+    runtime: Runtime,
+    status: SafeStatus,
+    environment: ResolvedEnvironment,
+    expectedEpoch: number,
+  ) =>
+    Effect.gen(function* () {
       if (!runtimeIsCurrent(runtime, runtimes, expectedEpoch)) {
         yield* runtime.remote.stopAll;
         return;
       }
-      // Never reload a draft that points at a dead relay. Removing the
-      // capability is safer than allowing OpenCode to construct a direct,
-      // tokenless remote MCP client; the next heartbeat reacquires it.
       if (!(yield* runtime.remote.health)) {
         yield* runtime.remote.stopAll;
         runtime.state = { ...emptyProtectionState(), explicitlyDisabled };
@@ -491,17 +498,18 @@ export function makeScopedController(options: ScopedControllerOptions) {
         Effect.tapError((error) =>
           Effect.sync(() => rememberFailure(runtime, error, "refresh_failed")),
         ),
-        Effect.catch((error) =>
-          error instanceof VarlockError && error.code === "not_ready"
-            ? Effect.succeed(undefined)
-            : Effect.fail(error),
-        ),
+        Effect.catch((error) => recoverRefreshError(error)),
       );
       if (!result) return;
       if (!runtimeIsCurrent(runtime, runtimes, epoch)) return;
       yield* reconcile(runtime, result.status, result.environment, epoch);
       yield* startObserver(runtime);
     });
+
+  const recoverRefreshError = (error: unknown) =>
+    error instanceof VarlockError && error.code === "not_ready"
+      ? Effect.succeed(undefined)
+      : Effect.fail(error);
 
   const operationRefresh = (runtime: Runtime, lease: BrokerLease) =>
     Effect.gen(function* () {

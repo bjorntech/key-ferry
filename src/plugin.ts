@@ -6,6 +6,7 @@ import type {
   ResolvedEnvironment,
   SafeStatus,
 } from "./contracts.js";
+import { VarlockError } from "./contracts.js";
 import { parseOptions, type ServerProtection, type ValidatedOptions } from "./options.js";
 import {
   makeRemoteRelayCoordinator,
@@ -18,6 +19,11 @@ import {
 import { KeyFerryRpc, publicMessage, rpcError, sanitizeStatus } from "./rpc.js";
 import { loadScopedConfiguration } from "./scoped-config.js";
 import { makeScopedController } from "./scoped-controller.js";
+
+const asVarlockError = (error: unknown): VarlockError =>
+  error instanceof VarlockError
+    ? error
+    : new VarlockError({ code: "unavailable", message: "operation unavailable", retryable: true });
 
 export interface McpEditor {
   list(): readonly [string, Types.DeepMutable<Mcp.ServerConfig>][];
@@ -231,14 +237,26 @@ export function makePlugin(
               activeController.operation("refresh", input).pipe(
                 Effect.map(sanitizeStatus),
                 Effect.catch((error) =>
-                  Effect.fail(context.error("unavailable", publicMessage(error), rpcError(error))),
+                  Effect.fail(
+                    context.error(
+                      "unavailable",
+                      publicMessage(asVarlockError(error)),
+                      rpcError(asVarlockError(error)),
+                    ),
+                  ),
                 ),
               ),
             doctor: (input, context) =>
               activeController.operation("doctor", input).pipe(
                 Effect.map(sanitizeStatus),
                 Effect.catch((error) =>
-                  Effect.fail(context.error("unavailable", publicMessage(error), rpcError(error))),
+                  Effect.fail(
+                    context.error(
+                      "unavailable",
+                      publicMessage(asVarlockError(error)),
+                      rpcError(asVarlockError(error)),
+                    ),
+                  ),
                 ),
               ),
             activateProject: (_, context) =>

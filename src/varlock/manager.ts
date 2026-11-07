@@ -518,6 +518,13 @@ export function makeProjectKeyFerryManager(
         disposed: false,
       };
       let ownershipHash = createHash("sha256").update(cwd).digest("hex");
+      const processStartTime = (pid: number, swallow = false) =>
+        processService.startTime
+          ? Effect.runPromise(processService.startTime(pid)).catch((error) => {
+              if (swallow) return undefined;
+              throw error;
+            })
+          : Promise.resolve(undefined);
       const ownershipRecord = (
         session: VarlockSessionRecord,
         pid: number,
@@ -525,9 +532,7 @@ export function makeProjectKeyFerryManager(
       ) =>
         Effect.tryPromise({
           try: async () => {
-            const starterStartTime = processService.startTime
-              ? await Effect.runPromise(processService.startTime(pid))
-              : undefined;
+            const starterStartTime = await processStartTime(pid);
             await writeOwnershipRecord(
               {
                 brokerKeyHash: (ownershipHash = createHash("sha256")
@@ -542,11 +547,7 @@ export function makeProjectKeyFerryManager(
               },
               ownershipFileOps(config.ownershipDirectory ?? ownershipDirectory()),
             );
-            const proxyStartTime = processService.startTime
-              ? await Effect.runPromise(processService.startTime(session.ownerPid)).catch(
-                  () => undefined,
-                )
-              : undefined;
+            const proxyStartTime = await processStartTime(session.ownerPid, true);
             await appendProxyLedgerEntry(
               {
                 version: 1,
@@ -876,6 +877,28 @@ export function makeProjectKeyFerryManager(
           }),
         );
 
+      const recoverStartFailure = (error: VarlockError, cleanupDirectory: string | undefined) =>
+        Effect.gen(function* () {
+          if (error.code !== "disposed") updateFailure(error);
+          yield* cleanupFailedStart(cleanupDirectory);
+          const failure = error;
+          return yield* Effect.fail(failure);
+        });
+      const updateFailure = (failure: VarlockError) => {
+        if (state.phase === "failed" && state.session) state.error = failure;
+        else clearCapability("failed", failure);
+      };
+      const cleanupFailedStart = (directory: string | undefined) =>
+        directory && !state.session
+          ? Effect.gen(function* () {
+              if (certDirectory === directory) {
+                certDirectory = undefined;
+                certDirectoryReal = undefined;
+              }
+              yield* removeOwnedDirectory(directory);
+            })
+          : Effect.void;
+
       const startInternal = (): Effect.Effect<SafeStatus, VarlockError> => {
         let acquired: ManagedProcess | undefined;
         let cleanupDirectory: string | undefined;
@@ -957,29 +980,7 @@ export function makeProjectKeyFerryManager(
             state.error = undefined;
             return statusSnapshot(state, cwd);
           }).pipe(
-            Effect.catch((error) =>
-              Effect.gen(function* () {
-                const failure = error ?? safeError("start_failed", true);
-                if (failure.code !== "disposed") {
-                  // A failed post-capture stop must retain the session so the
-                  // finalizer can retry the exact UUID without deleting its record.
-                  if (state.phase === "failed" && state.session) state.error = failure;
-                  else clearCapability("failed", failure);
-                }
-                // Every failure after certificate acquisition must release the
-                // directory, but only after the sidecar stop attempt above.
-                // Retain it when a daemonized session is still alive: the
-                // ownership record/finalizer is then responsible for retrying.
-                if (cleanupDirectory && !state.session) {
-                  if (certDirectory === cleanupDirectory) {
-                    certDirectory = undefined;
-                    certDirectoryReal = undefined;
-                  }
-                  yield* removeOwnedDirectory(cleanupDirectory);
-                }
-                return yield* Effect.fail(failure);
-              }),
-            ),
+            Effect.catch((error) => recoverStartFailure(error, cleanupDirectory)),
             Effect.onInterrupt(() => interruptedStartCleanup(acquired, cleanupDirectory)),
           );
         });

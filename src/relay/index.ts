@@ -405,143 +405,189 @@ const start = (
           });
         res.end(body);
       };
+      const forwardResponse = async (
+        req: IncomingMessage,
+        res: ServerResponse,
+        target: URL,
+        controller: AbortController,
+        body: PassThrough,
+      ) => {
+        const upstreamResponse = await throughProxy(
+          target,
+          proxy,
+          config.managerCaPem,
+          req.method ?? "GET",
+          cleanHeaders(
+            req.headers,
+            Object.fromEntries(
+              Object.entries(config.placeholderHeaders).map(([k, v]) => [k.toLowerCase(), v]),
+            ),
+            target,
+          ),
+          req.method === "GET" || req.method === "HEAD" ? undefined : body,
+          config.connectTimeoutMs ?? connectDefault,
+          config.idleTimeoutMs ?? idleDefault,
+          controller.signal,
+        );
+        controller.signal.addEventListener("abort", () => upstreamResponse.body.destroy(), {
+          once: true,
+        });
+        await writeRelayResponse(res, upstreamResponse, controller.signal);
+      };
+      const writeRelayResponse = async (
+        res: ServerResponse,
+        upstreamResponse: {
+          statusCode: number;
+          headers: Record<string, string | string[] | undefined>;
+          body: IncomingMessage;
+        },
+        signal: AbortSignal,
+      ) => {
+        const headers = responseHeaders(
+          upstreamResponse.headers,
+          upstream,
+          localOrigin(),
+          register,
+        );
+        const contentType =
+          typeof headers["content-type"] === "string" ? headers["content-type"] : "";
+        const rewrittenSse = contentType.toLowerCase().includes("text/event-stream");
+        if (rewrittenSse && unsupportedEncoding(headers)) throw failure("unsupported");
+        if (rewrittenSse) {
+          delete headers["content-length"];
+          delete headers["content-encoding"];
+        }
+        await streamRelayResponse(res, upstreamResponse, headers, rewrittenSse, signal);
+      };
+      const unsupportedEncoding = (headers: Record<string, string | string[] | undefined>) =>
+        headers["content-encoding"] !== undefined && headers["content-encoding"] !== "identity";
+      const streamRelayResponse = async (
+        res: ServerResponse,
+        upstreamResponse: { statusCode: number; body: IncomingMessage },
+        headers: Record<string, string | string[] | undefined>,
+        rewrittenSse: boolean,
+        signal: AbortSignal,
+      ) => {
+        const stream = rewrittenSse
+          ? endpointRewrite(upstreamResponse.body, upstream, localOrigin(), register, maxBytes)
+          : upstreamResponse.body;
+        const iterator = stream[Symbol.asyncIterator]();
+        const first = await iterator.next();
+        res.writeHead(upstreamResponse.statusCode, headers);
+        if (!first.done) await write(res, first.value, signal);
+        for await (const chunk of { [Symbol.asyncIterator]: () => iterator })
+          await write(res, chunk, signal);
+        res.end();
+      };
+      const authorize = (req: IncomingMessage): URL | number => {
+        const access = authorizeAccess(req);
+        if (access !== undefined) return access;
+        return authorizeRoute(req);
+      };
+      const authorizeAccess = (req: IncomingMessage): number | undefined => {
+        if (stopped || !isLoopback(req.socket.remoteAddress)) return 403;
+        const supplied = req.headers[RELAY_AUTH_HEADER];
+        const received = typeof supplied === "string" ? Buffer.from(supplied) : Buffer.alloc(0);
+        return invalidToken(received) ? 401 : undefined;
+      };
+      const invalidToken = (received: Buffer) =>
+        received.length !== tokenBytes.length || !timingSafeEqual(received, tokenBytes);
+      const authorizeRoute = (req: IncomingMessage): URL | number => {
+        const target = routes.get(req.url ?? "/");
+        if (!target || target.origin !== upstream.origin) return 404;
+        return target;
+      };
+      const validateRequest = (req: IncomingMessage): number | undefined => {
+        if (!new Set(["GET", "POST", "DELETE"]).has(req.method ?? "GET")) return 405;
+        if (active >= maxConnections) return 429;
+        const length = req.headers["content-length"];
+        if (oversizedHeader(length)) return 413;
+        return undefined;
+      };
+      const oversizedHeader = (length: string | undefined) => !!length && Number(length) > maxBytes;
+      const setupBody = (req: IncomingMessage, controller: AbortController) => {
+        const body = new PassThrough();
+        const state = { oversized: false };
+        let bytes = 0;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const reset = () => {
+          if (timer) clearTimeout(timer);
+          timer = setTimeout(() => {
+            controller.abort();
+            body.destroy(failure("timeout"));
+            req.destroy();
+          }, config.idleTimeoutMs ?? idleDefault);
+        };
+        reset();
+        req.on("data", (chunk: Buffer) => {
+          reset();
+          bytes += chunk.byteLength;
+          if (bytes > maxBytes && !state.oversized) {
+            state.oversized = true;
+            body.destroy(failure("body-too-large"));
+            req.destroy();
+          }
+        });
+        req.on("end", () => {
+          if (timer) clearTimeout(timer);
+          body.end();
+        });
+        req.on("error", (cause) => body.destroy(cause));
+        req.pipe(body);
+        return { body, state, timer: () => timer };
+      };
+      const failResponse = (
+        res: ServerResponse,
+        cause: unknown,
+        oversized: boolean,
+        controller: AbortController,
+      ) => {
+        controller.abort();
+        if (res.headersSent) return res.destroy();
+        const unavailable = isUnavailable(cause);
+        reject(
+          res,
+          oversized ? 413 : 502,
+          unavailable ? "key-ferry relay unavailable; broker connection failed" : "",
+        );
+      };
+      const isUnavailable = (cause: unknown) =>
+        cause instanceof RelayError &&
+        (cause.code === "upstream-connect-failed" || cause.code === "upstream-tls-failed");
+      const runAuthorized = async (req: IncomingMessage, res: ServerResponse, target: URL) => {
+        active++;
+        const controller = new AbortController();
+        controllers.add(controller);
+        let finished = false;
+        const cancel = () => {
+          if (!finished && !res.writableEnded) controller.abort();
+        };
+        req.once("aborted", cancel);
+        res.once("close", cancel);
+        const prepared = setupBody(req, controller);
+        try {
+          await forwardResponse(req, res, target, controller, prepared.body);
+        } catch (cause) {
+          failResponse(res, cause, prepared.state.oversized, controller);
+        } finally {
+          finished = true;
+          controllers.delete(controller);
+          req.removeListener("aborted", cancel);
+          res.removeListener("close", cancel);
+          const timer = prepared.timer();
+          if (timer) clearTimeout(timer);
+          active--;
+        }
+      };
+      const dispatch = async (req: IncomingMessage, res: ServerResponse) => {
+        const authorized = authorize(req);
+        if (typeof authorized === "number") return reject(res, authorized);
+        const invalid = validateRequest(req);
+        if (invalid !== undefined) return reject(res, invalid);
+        await runAuthorized(req, res, authorized);
+      };
       const handle = (req: IncomingMessage, res: ServerResponse): Effect.Effect<void, never> =>
-        Effect.tryPromise({
-          try: async () => {
-            if (stopped || !isLoopback(req.socket.remoteAddress)) return reject(res, 403);
-            const supplied = req.headers[RELAY_AUTH_HEADER];
-            const received = typeof supplied === "string" ? Buffer.from(supplied) : Buffer.alloc(0);
-            if (received.length !== tokenBytes.length || !timingSafeEqual(received, tokenBytes))
-              return reject(res, 401);
-            const rawPath = req.url ?? "/";
-            const target = routes.get(rawPath);
-            if (!target || target.origin !== upstream.origin) return reject(res, 404);
-            if (!new Set(["GET", "POST", "DELETE"]).has(req.method ?? "GET"))
-              return reject(res, 405);
-            if (active >= maxConnections) return reject(res, 429);
-            const length = req.headers["content-length"];
-            if (length && Number(length) > maxBytes) return reject(res, 413);
-            active++;
-            const controller = new AbortController();
-            controllers.add(controller);
-            let finished = false;
-            const cancel = () => {
-              if (!finished && !res.writableEnded) controller.abort();
-            };
-            req.once("aborted", cancel);
-            res.once("close", cancel);
-            const body = new PassThrough();
-            let bytes = 0;
-            let oversized = false;
-            let bodyTimer: ReturnType<typeof setTimeout> | undefined;
-            const resetBodyTimer = () => {
-              if (bodyTimer) clearTimeout(bodyTimer);
-              bodyTimer = setTimeout(() => {
-                controller.abort();
-                body.destroy(failure("timeout"));
-                req.destroy();
-              }, config.idleTimeoutMs ?? idleDefault);
-            };
-            resetBodyTimer();
-            req.on("data", (chunk: Buffer) => {
-              resetBodyTimer();
-              bytes += chunk.byteLength;
-              if (bytes > maxBytes && !oversized) {
-                oversized = true;
-                body.destroy(failure("body-too-large"));
-                req.destroy();
-              }
-            });
-            req.on("end", () => {
-              if (bodyTimer) clearTimeout(bodyTimer);
-              body.end();
-            });
-            req.on("error", (cause) => body.destroy(cause));
-            req.pipe(body);
-            try {
-              const upstreamResponse = await throughProxy(
-                target,
-                proxy,
-                config.managerCaPem,
-                req.method ?? "GET",
-                cleanHeaders(
-                  req.headers,
-                  Object.fromEntries(
-                    Object.entries(config.placeholderHeaders).map(([k, v]) => [k.toLowerCase(), v]),
-                  ),
-                  target,
-                ),
-                req.method === "GET" || req.method === "HEAD" ? undefined : body,
-                config.connectTimeoutMs ?? connectDefault,
-                config.idleTimeoutMs ?? idleDefault,
-                controller.signal,
-              );
-              controller.signal.addEventListener("abort", () => upstreamResponse.body.destroy(), {
-                once: true,
-              });
-              const headers = responseHeaders(
-                upstreamResponse.headers,
-                upstream,
-                localOrigin(),
-                register,
-              );
-              const contentType =
-                typeof headers["content-type"] === "string" ? headers["content-type"] : "";
-              const rewrittenSse = contentType.toLowerCase().includes("text/event-stream");
-              if (
-                rewrittenSse &&
-                headers["content-encoding"] !== undefined &&
-                headers["content-encoding"] !== "identity"
-              )
-                throw failure("unsupported");
-              if (rewrittenSse) {
-                delete headers["content-length"];
-                delete headers["content-encoding"];
-              }
-              const stream = rewrittenSse
-                ? endpointRewrite(
-                    upstreamResponse.body,
-                    upstream,
-                    localOrigin(),
-                    register,
-                    maxBytes,
-                  )
-                : upstreamResponse.body;
-              const iterator = stream[Symbol.asyncIterator]();
-              const first = await iterator.next();
-              res.writeHead(upstreamResponse.statusCode, headers);
-              if (!first.done) await write(res, first.value, controller.signal);
-              for await (const chunk of { [Symbol.asyncIterator]: () => iterator })
-                await write(res, chunk, controller.signal);
-              res.end();
-            } catch (cause) {
-              // A response may already have been obtained when SSE rewriting,
-              // backpressure, or endpoint validation fails. Abort the shared
-              // controller in every failure path so the CONNECT tunnel and
-              // upstream response cannot outlive this request.
-              controller.abort();
-              if (!res.headersSent) {
-                const unavailable =
-                  cause instanceof RelayError &&
-                  (cause.code === "upstream-connect-failed" ||
-                    cause.code === "upstream-tls-failed");
-                reject(
-                  res,
-                  oversized ? 413 : 502,
-                  unavailable ? "key-ferry relay unavailable; broker connection failed" : "",
-                );
-              } else res.destroy();
-            } finally {
-              finished = true;
-              controllers.delete(controller);
-              req.removeListener("aborted", cancel);
-              res.removeListener("close", cancel);
-              if (bodyTimer) clearTimeout(bodyTimer);
-              active--;
-            }
-          },
-          catch: () => failure("io"),
-        }).pipe(
+        Effect.promise(() => dispatch(req, res)).pipe(
           Effect.asVoid,
           Effect.catch(() => Effect.void),
         );

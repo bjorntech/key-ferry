@@ -96,25 +96,30 @@ export async function readProxyLedger(
     return [];
   }
   const entries = new Map<string, ProxyLedgerEntry>();
-  for (const line of text.split("\n")) {
-    try {
-      const value = JSON.parse(line);
-      if (
-        value?.version === 1 &&
-        typeof value.sessionUuid === "string" &&
-        Number.isSafeInteger(value.proxyPid) &&
-        Number.isSafeInteger(value.ownerPid) &&
-        typeof value.cwd === "string" &&
-        typeof value.created === "string"
-      ) {
-        if (value.retiredAt) entries.delete(value.sessionUuid);
-        else entries.set(value.sessionUuid, value as ProxyLedgerEntry);
-      }
-    } catch {
-      /* tolerate a torn/corrupt append */
-    }
-  }
+  for (const line of text.split("\n")) applyLedgerLine(line, entries);
   return [...entries.values()];
+}
+
+function applyLedgerLine(line: string, entries: Map<string, ProxyLedgerEntry>): void {
+  try {
+    const value = JSON.parse(line);
+    if (!isLedgerEntry(value)) return;
+    if (value.retiredAt) entries.delete(value.sessionUuid);
+    else entries.set(value.sessionUuid, value);
+  } catch {
+    /* tolerate a torn/corrupt append */
+  }
+}
+
+function isLedgerEntry(value: any): value is ProxyLedgerEntry {
+  return (
+    value?.version === 1 &&
+    typeof value.sessionUuid === "string" &&
+    Number.isSafeInteger(value.proxyPid) &&
+    Number.isSafeInteger(value.ownerPid) &&
+    typeof value.cwd === "string" &&
+    typeof value.created === "string"
+  );
 }
 
 async function retireProxyLedgerEntry(
@@ -396,53 +401,145 @@ async function reapOwnershipRecordsOnce(
     return { reaped: 0, skipped: records.length };
   }
   const result = await reapActiveRecords(records, sessions, verifier, ops);
-  // A durable ledger is the primary positive signal when the temp ownership
-  // record disappeared. The process marker is a compatible fallback for
-  // versions that preserve inherited environment in the daemon.
-  const ledger = await readProxyLedger(ops, ops.ledgerPath);
-  const recordedSessions = new Set(records.map((record) => record.sessionUuid));
-  for (const session of sessions) {
-    if (session.endedAt || recordedSessions.has(session.uuid)) continue;
-    const proxyPid = session.pid ?? session.ownerPid;
-    if (proxyPid === undefined) continue;
-    const entry = ledger.find(
-      (item) =>
-        item.sessionUuid === session.uuid &&
-        item.proxyPid === proxyPid &&
-        (item.proxyStartTime === undefined ||
-          session.startTime === undefined ||
-          item.proxyStartTime === session.startTime),
-    );
-    let positive = entry !== undefined || session.keyFerryMarker === "key-ferry";
-    if (!positive && verifier.processEnv) {
-      const env = await verifier.processEnv(proxyPid).catch(() => undefined);
-      positive = env?.KEY_FERRY_PROXY_MARKER === "key-ferry";
-    }
-    if (!positive || !verifier.isAlive) continue;
-    const ownerPid = entry?.ownerPid ?? session.ownerPid;
-    if (ownerPid === undefined || (await ownerAlive(ownerPid, entry?.ownerStartTime, verifier)))
-      continue;
-    try {
-      await verifier.stop({
-        version: 2,
-        brokerKeyHash: "f".repeat(64),
-        sessionUuid: session.uuid,
-        starterPid: ownerPid,
-        ...(entry?.ownerStartTime ? { starterStartTime: entry.ownerStartTime } : {}),
-        cwd: entry?.cwd ?? session.cwd ?? "",
-        created: entry?.created ?? new Date().toISOString(),
-        ...(entry ? { proxyPid: entry.proxyPid } : {}),
-        ...(entry?.proxyStartTime ? { proxyStartTime: entry.proxyStartTime } : {}),
-      });
-      if (await sessionGone(session.uuid, verifier)) {
-        if (entry) await retireProxyLedgerEntry(entry, ops).catch(() => undefined);
-        result.reaped++;
-      } else result.skipped++;
-    } catch {
-      result.skipped++;
-    }
-  }
+  await reapOrphanSessions(records, sessions, verifier, ops, result);
   return result;
+}
+
+async function reapOrphanSessions(
+  records: BrokerOwnershipRecord[],
+  sessions: readonly {
+    uuid: string;
+    endedAt?: string;
+    ownerPid?: number;
+    cwd?: string;
+    keyFerryMarker?: string;
+    pid?: number;
+    startTime?: string;
+  }[],
+  verifier: OwnershipVerifier,
+  ops: OwnershipFileOps,
+  result: { reaped: number; skipped: number },
+): Promise<void> {
+  const ledger = await readProxyLedger(ops, ops.ledgerPath);
+  const recorded = new Set(records.map((record) => record.sessionUuid));
+  for (const session of sessions)
+    await reapOrphanSession(session, recorded, ledger, verifier, ops, result);
+}
+
+async function reapOrphanSession(
+  session: {
+    uuid: string;
+    endedAt?: string;
+    ownerPid?: number;
+    cwd?: string;
+    keyFerryMarker?: string;
+    pid?: number;
+    startTime?: string;
+  },
+  recorded: Set<string>,
+  ledger: ProxyLedgerEntry[],
+  verifier: OwnershipVerifier,
+  ops: OwnershipFileOps,
+  result: { reaped: number; skipped: number },
+): Promise<void> {
+  if (session.endedAt || recorded.has(session.uuid)) return;
+  const proxyPid = session.pid ?? session.ownerPid;
+  const orphan =
+    proxyPid === undefined ? undefined : await findOrphanOwner(session, proxyPid, ledger, verifier);
+  if (orphan)
+    await stopOrphanSession(session, orphan.entry, orphan.ownerPid, verifier, ops, result);
+}
+
+async function findOrphanOwner(
+  session: {
+    uuid: string;
+    ownerPid?: number;
+    keyFerryMarker?: string;
+    pid?: number;
+    startTime?: string;
+  },
+  proxyPid: number,
+  ledger: ProxyLedgerEntry[],
+  verifier: OwnershipVerifier,
+): Promise<{ entry: ProxyLedgerEntry | undefined; ownerPid: number } | undefined> {
+  const entry = ledger.find((item) =>
+    matchesLedgerEntry(item, session.uuid, proxyPid, session.startTime),
+  );
+  if (!(await hasPositiveOwnership(entry, session, proxyPid, verifier)) || !verifier.isAlive)
+    return undefined;
+  const ownerPid = entry?.ownerPid ?? session.ownerPid;
+  if (ownerPid === undefined || (await ownerAlive(ownerPid, entry?.ownerStartTime, verifier)))
+    return undefined;
+  return { entry, ownerPid };
+}
+
+async function stopOrphanSession(
+  session: { uuid: string; ownerPid?: number; cwd?: string },
+  entry: ProxyLedgerEntry | undefined,
+  ownerPid: number,
+  verifier: OwnershipVerifier,
+  ops: OwnershipFileOps,
+  result: { reaped: number; skipped: number },
+): Promise<void> {
+  try {
+    await verifier.stop(makeOrphanRecord(session, entry, ownerPid));
+    if (await sessionGone(session.uuid, verifier)) {
+      if (entry) await retireProxyLedgerEntry(entry, ops).catch(() => undefined);
+      result.reaped++;
+    } else result.skipped++;
+  } catch {
+    result.skipped++;
+  }
+}
+
+function matchesLedgerEntry(
+  entry: ProxyLedgerEntry,
+  uuid: string,
+  pid: number,
+  start?: string,
+): boolean {
+  return (
+    entry.sessionUuid === uuid &&
+    entry.proxyPid === pid &&
+    (entry.proxyStartTime === undefined || start === undefined || entry.proxyStartTime === start)
+  );
+}
+
+async function hasPositiveOwnership(
+  entry: ProxyLedgerEntry | undefined,
+  session: { keyFerryMarker?: string },
+  pid: number,
+  verifier: OwnershipVerifier,
+): Promise<boolean> {
+  if (entry || session.keyFerryMarker === "key-ferry") return true;
+  if (!verifier.processEnv) return false;
+  const env = await verifier.processEnv(pid).catch(() => undefined);
+  return env?.KEY_FERRY_PROXY_MARKER === "key-ferry";
+}
+
+function makeOrphanRecord(
+  session: { uuid: string; ownerPid?: number; cwd?: string },
+  entry: ProxyLedgerEntry | undefined,
+  ownerPid: number,
+): BrokerOwnershipRecord {
+  return {
+    version: 2,
+    brokerKeyHash: "f".repeat(64),
+    sessionUuid: session.uuid,
+    starterPid: ownerPid,
+    ...orphanStartTime(entry?.ownerStartTime, "starterStartTime"),
+    cwd: entry?.cwd ?? session.cwd ?? "",
+    created: entry?.created ?? new Date().toISOString(),
+    ...optionalNumber(entry?.proxyPid, "proxyPid"),
+    ...orphanStartTime(entry?.proxyStartTime, "proxyStartTime"),
+  };
+}
+
+function orphanStartTime(value: string | undefined, key: "starterStartTime" | "proxyStartTime") {
+  return value ? { [key]: value } : {};
+}
+function optionalNumber(value: number | undefined, key: "proxyPid") {
+  return value === undefined ? {} : { [key]: value };
 }
 
 async function ownerAlive(
@@ -498,54 +595,67 @@ async function reapActiveRecords(
   let reaped = 0,
     skipped = 0;
   for (const record of records) {
-    const active = sessions.find((s) => s.uuid === record.sessionUuid && !s.endedAt);
-    if (!active) {
-      if (await sessionGone(record.sessionUuid, verifier)) {
-        const ledger = await readProxyLedger(ops, ops.ledgerPath);
-        const entry = ledger.find((item) => item.sessionUuid === record.sessionUuid);
-        if (entry) await retireProxyLedgerEntry(entry, ops).catch(() => undefined);
-      }
-      await removeOwnershipRecord(record.brokerKeyHash, ops);
-      lifecycleLoggers.forEach((l) =>
-        l({
-          event: "stale-reaped",
-          keyHash: record.brokerKeyHash.slice(0, 12),
-          directory: record.cwd,
-        }),
-      );
-      reaped++;
-      continue;
-    }
-    // A live starter owns the session.  In particular, do not mistake a
-    // daemonized proxy for an orphan merely because the starter command has
-    // already returned; the identity check also protects against PID reuse.
-    if (await starterStillOwned(record, verifier)) {
-      skipped++;
-      continue;
-    }
-    try {
-      await verifier.stop(record);
-      if (!(await sessionGone(record.sessionUuid, verifier))) {
-        skipped++;
-        continue;
-      }
-      await removeOwnershipRecord(record.brokerKeyHash, ops);
-      const ledger = await readProxyLedger(ops, ops.ledgerPath);
-      const entry = ledger.find((item) => item.sessionUuid === record.sessionUuid);
-      if (entry) await retireProxyLedgerEntry(entry, ops).catch(() => undefined);
-      lifecycleLoggers.forEach((l) =>
-        l({
-          event: "stale-reaped",
-          keyHash: record.brokerKeyHash.slice(0, 12),
-          directory: record.cwd,
-        }),
-      );
-      reaped++;
-    } catch {
-      skipped++;
-    }
+    const result = await reapActiveRecord(record, sessions, verifier, ops);
+    reaped += result.reaped;
+    skipped += result.skipped;
   }
   return { reaped, skipped };
+}
+
+async function reapActiveRecord(
+  record: BrokerOwnershipRecord,
+  sessions: readonly { uuid: string; endedAt?: string }[],
+  verifier: OwnershipVerifier,
+  ops: OwnershipFileOps,
+): Promise<{ reaped: number; skipped: number }> {
+  const active = sessions.find((s) => s.uuid === record.sessionUuid && !s.endedAt);
+  if (!active) {
+    await removeInactiveRecord(record, verifier, ops);
+    return { reaped: 1, skipped: 0 };
+  }
+  if (await starterStillOwned(record, verifier)) return { reaped: 0, skipped: 1 };
+  return reapOwnedRecord(record, verifier, ops);
+}
+
+async function removeInactiveRecord(
+  record: BrokerOwnershipRecord,
+  verifier: OwnershipVerifier,
+  ops: OwnershipFileOps,
+): Promise<void> {
+  if (await sessionGone(record.sessionUuid, verifier)) {
+    const ledger = await readProxyLedger(ops, ops.ledgerPath);
+    const entry = ledger.find((item) => item.sessionUuid === record.sessionUuid);
+    if (entry) await retireProxyLedgerEntry(entry, ops).catch(() => undefined);
+  }
+  await removeOwnershipRecord(record.brokerKeyHash, ops);
+  lifecycleLoggers.forEach((l) =>
+    l({ event: "stale-reaped", keyHash: record.brokerKeyHash.slice(0, 12), directory: record.cwd }),
+  );
+}
+
+async function reapOwnedRecord(
+  record: BrokerOwnershipRecord,
+  verifier: OwnershipVerifier,
+  ops: OwnershipFileOps,
+): Promise<{ reaped: number; skipped: number }> {
+  try {
+    await verifier.stop(record);
+    if (!(await sessionGone(record.sessionUuid, verifier))) return { reaped: 0, skipped: 1 };
+    await removeOwnershipRecord(record.brokerKeyHash, ops);
+    const ledger = await readProxyLedger(ops, ops.ledgerPath);
+    const entry = ledger.find((item) => item.sessionUuid === record.sessionUuid);
+    if (entry) await retireProxyLedgerEntry(entry, ops).catch(() => undefined);
+    lifecycleLoggers.forEach((l) =>
+      l({
+        event: "stale-reaped",
+        keyHash: record.brokerKeyHash.slice(0, 12),
+        directory: record.cwd,
+      }),
+    );
+    return { reaped: 1, skipped: 0 };
+  } catch {
+    return { reaped: 0, skipped: 1 };
+  }
 }
 
 const REAP_VERIFY_ATTEMPTS = 3;
@@ -557,10 +667,13 @@ async function sessionGone(sessionUuid: string, verifier: OwnershipVerifier): Pr
     const sessions = await verifier.status().catch(() => undefined);
     if (sessions && !sessions.some((session) => session.uuid === sessionUuid && !session.endedAt))
       return true;
-    if (attempt + 1 < REAP_VERIFY_ATTEMPTS)
-      await new Promise((resolve) => setTimeout(resolve, REAP_VERIFY_DELAY_MS));
+    await waitForReapAttempt(attempt);
   }
   return false;
+}
+async function waitForReapAttempt(attempt: number): Promise<void> {
+  if (attempt + 1 < REAP_VERIFY_ATTEMPTS)
+    await new Promise((resolve) => setTimeout(resolve, REAP_VERIFY_DELAY_MS));
 }
 export function reapStaleOwnershipRecords(
   command: string | readonly string[] = "varlock",
