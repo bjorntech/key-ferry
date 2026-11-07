@@ -360,7 +360,9 @@ export async function reapOwnershipRecords(
   inFlightByOps.set(ops as object, byDirectory);
   const existing = byDirectory.get(key);
   if (existing) return existing;
-  const operation = reapOwnershipRecordsOnce(verifier, ops);
+  const operation = reapOwnershipRecordsOnce(verifier, ops).finally(() => {
+    if (byDirectory.get(key) === operation) byDirectory.delete(key);
+  });
   byDirectory.set(key, operation);
   return operation;
 }
@@ -784,18 +786,9 @@ export function reapStaleOwnershipRecords(
       }
     },
   };
-  const byDirectory = inFlightByOps.get(ops as object) ?? new Map();
-  inFlightByOps.set(ops as object, byDirectory);
-  const existing = byDirectory.get(directory);
-  if (existing) return existing.then(() => undefined).catch(() => undefined);
-  const pass = reapOwnershipRecords(verifier, ops)
+  return reapOwnershipRecords(verifier, ops)
     .then(() => undefined)
     .catch(() => undefined);
-  byDirectory.set(
-    directory,
-    pass.then(() => ({ reaped: 0, skipped: 0 })),
-  );
-  return pass;
 }
 
 export async function starterStillOwned(

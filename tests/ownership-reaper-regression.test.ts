@@ -106,6 +106,36 @@ describe("ownership reaper regressions", () => {
     }
   });
 
+  test("does not retain a completed pass for a later reaper call", async () => {
+    const { root, ops } = await fixture();
+    try {
+      const live = record("b".repeat(64));
+      const reused = { ...record("c".repeat(64)), starterPid: 43 };
+      await writeOwnershipRecord(live, ops);
+      await writeOwnershipRecord(reused, ops);
+      let statusCalls = 0;
+      const verifier = {
+        isAlive: async () => true,
+        startTime: async (pid: number) => (pid === 42 ? "start" : "other"),
+        command: async () => ["varlock", "proxy", "start"],
+        status: async () => {
+          statusCalls++;
+          return [{ uuid: live.sessionUuid }, { uuid: reused.sessionUuid }];
+        },
+        stop: async () => undefined,
+      };
+      await reapOwnershipRecords(verifier, ops);
+      await reapOwnershipRecords(verifier, ops);
+      expect(statusCalls).toBe(8);
+      expect((await readOwnershipRecords(ops)).map((item) => item.sessionUuid)).toEqual([
+        live.sessionUuid,
+        reused.sessionUuid,
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("only reaps a recordless session with an explicit marker", async () => {
     const { root, ops } = await fixture();
     try {

@@ -461,6 +461,10 @@ function assertOwnedCertificate(cert: Awaited<ReturnType<typeof stat>>): void {
     throw new Error("certificate ownership or permissions invalid");
 }
 
+function healthCheckDue(force: boolean, lastHealthCheckAt: number, intervalMs: number): boolean {
+  return force || Date.now() - lastHealthCheckAt >= intervalMs;
+}
+
 function rejectUnavailableEnvironment(state: ManagerState): Effect.Effect<void, VarlockError> {
   if (state.phase === "failed" || state.phase === "degraded")
     return Effect.fail(safeError("not_ready", true));
@@ -573,14 +577,16 @@ export function makeProjectKeyFerryManager(
       };
 
       let lastHealthCheckAt = 0;
+      let healthCheckInFlight: Effect.Effect<void> | undefined;
       const healthCheck = (force = false): Effect.Effect<void> => {
         if (!state.process || !state.session) return Effect.void;
-        if (!force && Date.now() - lastHealthCheckAt < config.healthCheckIntervalMs)
+        if (healthCheckInFlight) return healthCheckInFlight;
+        if (!healthCheckDue(force, lastHealthCheckAt, config.healthCheckIntervalMs))
           return Effect.void;
         lastHealthCheckAt = Date.now();
         const old = state.session;
         const oldHandle = state.process;
-        return runCommand(
+        const check = runCommand(
           processService,
           config,
           cwd,
@@ -630,6 +636,10 @@ export function makeProjectKeyFerryManager(
           }),
           Effect.catch(() => Effect.void),
         );
+        healthCheckInFlight = check.pipe(
+          Effect.ensuring(Effect.sync(() => (healthCheckInFlight = undefined))),
+        );
+        return healthCheckInFlight;
       };
 
       const status: Effect.Effect<SafeStatus> = Effect.suspend(() => healthCheck()).pipe(
