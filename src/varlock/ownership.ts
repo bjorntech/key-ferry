@@ -301,7 +301,13 @@ export async function readOwnershipRecords(
     const record = await readRecord(ops, join(directory, name));
     if (record) records.push(record);
   }
-  return records;
+  // Directory enumeration order is filesystem-dependent (notably on ext4),
+  // so callers must not observe readdir order as ownership-record order.
+  return records.sort(
+    (left, right) =>
+      left.created.localeCompare(right.created) ||
+      left.sessionUuid.localeCompare(right.sessionUuid),
+  );
 }
 async function readRecord(
   ops: OwnershipFileOps,
