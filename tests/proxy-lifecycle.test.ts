@@ -118,16 +118,21 @@ test("ownership reaper stops matching and removes dead records", async () => {
       created: new Date(0).toISOString(),
     } as const;
     await writeOwnershipRecord({ ...base, brokerKeyHash: "b".repeat(64) }, ops);
-    await writeOwnershipRecord({ ...base, brokerKeyHash: "c".repeat(64), starterPid: 456 }, ops);
+    await writeOwnershipRecord(
+      { ...base, brokerKeyHash: "c".repeat(64), starterPid: 456, sessionUuid: "session-2" },
+      ops,
+    );
     let stopped = 0;
+    const active = new Set(["session", "session-2"]);
     const result = await reapOwnershipRecords(
       {
-        status: async () => [{ uuid: "session" }],
+        status: async () => [...active].map((uuid) => ({ uuid })),
         isAlive: async (pid) => pid === 123,
         startTime: async () => "start",
         command: async () => ["varlock"],
-        stop: async () => {
+        stop: async (item) => {
           stopped += 1;
+          active.delete(item.sessionUuid);
         },
       },
       ops,

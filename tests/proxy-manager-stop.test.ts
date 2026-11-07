@@ -99,6 +99,10 @@ function makeHarness(): Harness {
         h.runs.push([...input.args]);
         if (input.args.includes("proxy") && input.args.includes("stop") && h.failStop)
           return yield* Effect.fail(processError());
+        if (input.args.includes("proxy") && input.args.includes("stop")) {
+          const uuid = input.args[input.args.indexOf("--session") + 1];
+          h.sessions = h.sessions.filter((item) => item.uuid !== uuid);
+        }
         if (input.args.includes("proxy") && input.args.includes("status")) {
           statusCalls += 1;
           if (h.failFirstStatus && statusCalls === 1)

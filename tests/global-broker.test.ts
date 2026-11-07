@@ -85,6 +85,10 @@ function fakeProcess(
           if (alive) {
             alive = false;
             fixture.stops.push(pid);
+            // A successful `varlock proxy stop` removes the session from the
+            // status listing. Keep the fake's lifecycle semantics realistic so
+            // manager stop verification can observe completion.
+            sessions.delete(pid);
           }
         });
         const managed: ManagedProcess = {
@@ -101,7 +105,9 @@ function fakeProcess(
         ? "status"
         : input.args.includes("env")
           ? "environment"
-          : "other";
+          : input.args.includes("stop")
+            ? "stop"
+            : "other";
       fixture.runs.push({ account, operation });
       if (operation === "other" && refreshGate)
         return Effect.promise(async () => {
@@ -133,6 +139,13 @@ function fakeProcess(
           stdout: JSON.stringify(records),
           stderr: "fixture diagnostics are intentionally omitted",
         });
+      }
+      if (operation === "stop") {
+        const uuid = input.args[input.args.indexOf("--session") + 1];
+        for (const [pid, session] of sessions) {
+          if (session.uuid === uuid) sessions.delete(pid);
+        }
+        return Effect.succeed({ code: 0, signal: null, stdout: "", stderr: "" });
       }
       const sessionPid = Number(
         input.args[input.args.indexOf("--session") + 1]?.replace("fixture-session-", ""),

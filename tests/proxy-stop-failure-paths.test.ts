@@ -67,6 +67,7 @@ function fixture(root: string): Fixture {
     },
     placeholderOverrides: { OPENAI_API_KEY: "placeholder" },
   };
+  let sessionActive = true;
   f.service = {
     spawn: (input) =>
       Effect.sync(() => {
@@ -90,6 +91,7 @@ function fixture(root: string): Fixture {
       f.calls.push([...input.args]);
       if (input.args.includes("stop")) {
         const succeeded = f.stopResults.shift() ?? true;
+        if (succeeded) sessionActive = false;
         return succeeded
           ? Effect.succeed({ code: 0, signal: null, stdout: "", stderr: "" })
           : Effect.fail(
@@ -104,7 +106,7 @@ function fixture(root: string): Fixture {
         return Effect.succeed({
           code: 0,
           signal: null,
-          stdout: JSON.stringify([session]),
+          stdout: JSON.stringify(sessionActive ? [session] : []),
           stderr: "",
         });
       if (input.args.includes("env") && f.blockEnvironment) {

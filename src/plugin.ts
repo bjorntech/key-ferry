@@ -6,6 +6,7 @@ import type {
   ResolvedEnvironment,
   SafeStatus,
 } from "./contracts.js";
+import { VarlockError } from "./contracts.js";
 import { parseOptions, type ServerProtection, type ValidatedOptions } from "./options.js";
 import {
   makeRemoteRelayCoordinator,
@@ -18,6 +19,11 @@ import {
 import { KeyFerryRpc, publicMessage, rpcError, sanitizeStatus } from "./rpc.js";
 import { loadScopedConfiguration } from "./scoped-config.js";
 import { makeScopedController } from "./scoped-controller.js";
+
+const asVarlockError = (error: unknown): VarlockError =>
+  error instanceof VarlockError
+    ? error
+    : new VarlockError({ code: "unavailable", message: "operation unavailable", retryable: true });
 
 export interface McpEditor {
   list(): readonly [string, Types.DeepMutable<Mcp.ServerConfig>][];
@@ -37,8 +43,17 @@ export interface ManagedEnvironmentState {
   readonly injected: Readonly<Record<string, string>>;
 }
 
-function preserveDisabled(name: string, server: Mcp.ServerConfig, state: ProtectionState): boolean {
-  return state.explicitlyDisabled?.has(name) ?? server.disabled === true;
+function preserveDisabled(
+  name: string,
+  _server: Mcp.ServerConfig,
+  state: ProtectionState,
+): boolean {
+  // `server.disabled` may be the fail-closed mutation from an earlier
+  // reconciliation. Only the snapshot captured before Key Ferry touched the
+  // editor represents an explicit user disablement.
+  return state.explicitlyDisabled === undefined
+    ? _server.disabled === true
+    : state.explicitlyDisabled.has(name);
 }
 
 function disableConfig(config: Types.DeepMutable<Mcp.ServerConfig>): void {
@@ -222,14 +237,26 @@ export function makePlugin(
               activeController.operation("refresh", input).pipe(
                 Effect.map(sanitizeStatus),
                 Effect.catch((error) =>
-                  Effect.fail(context.error("unavailable", publicMessage(error), rpcError(error))),
+                  Effect.fail(
+                    context.error(
+                      "unavailable",
+                      publicMessage(asVarlockError(error)),
+                      rpcError(asVarlockError(error)),
+                    ),
+                  ),
                 ),
               ),
             doctor: (input, context) =>
               activeController.operation("doctor", input).pipe(
                 Effect.map(sanitizeStatus),
                 Effect.catch((error) =>
-                  Effect.fail(context.error("unavailable", publicMessage(error), rpcError(error))),
+                  Effect.fail(
+                    context.error(
+                      "unavailable",
+                      publicMessage(asVarlockError(error)),
+                      rpcError(asVarlockError(error)),
+                    ),
+                  ),
                 ),
               ),
             activateProject: (_, context) =>

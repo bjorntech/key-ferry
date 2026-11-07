@@ -181,10 +181,14 @@ test("failed release defers cleanup to startup reaper without losing registry st
   assert.equal(JSON.stringify(failed).includes(captured), true);
 
   const stopCalls: string[] = [];
+  let active = true;
   const reaped = await reapOwnershipRecords(
     {
-      status: async () => [{ uuid: captured }],
-      stop: async (record) => stopCalls.push(record.sessionUuid),
+      status: async () => (active ? [{ uuid: captured }] : []),
+      stop: async (record) => {
+        stopCalls.push(record.sessionUuid);
+        active = false;
+      },
     },
     ownershipFileOps(directory),
   );

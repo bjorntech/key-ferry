@@ -23,6 +23,7 @@ import {
 import { classifyStderr } from "./diagnostics.js";
 import {
   removeOwnershipRecord,
+  appendProxyLedgerEntry,
   reapStaleOwnershipRecords,
   writeOwnershipRecord,
   ownershipFileOps,
@@ -517,6 +518,13 @@ export function makeProjectKeyFerryManager(
         disposed: false,
       };
       let ownershipHash = createHash("sha256").update(cwd).digest("hex");
+      const processStartTime = (pid: number, swallow = false) =>
+        processService.startTime
+          ? Effect.runPromise(processService.startTime(pid)).catch((error) => {
+              if (swallow) return undefined;
+              throw error;
+            })
+          : Promise.resolve(undefined);
       const ownershipRecord = (
         session: VarlockSessionRecord,
         pid: number,
@@ -524,9 +532,7 @@ export function makeProjectKeyFerryManager(
       ) =>
         Effect.tryPromise({
           try: async () => {
-            const starterStartTime = processService.startTime
-              ? await Effect.runPromise(processService.startTime(pid))
-              : undefined;
+            const starterStartTime = await processStartTime(pid);
             await writeOwnershipRecord(
               {
                 brokerKeyHash: (ownershipHash = createHash("sha256")
@@ -536,6 +542,20 @@ export function makeProjectKeyFerryManager(
                 sessionUuid: session.uuid,
                 starterPid: pid,
                 ...(starterStartTime ? { starterStartTime } : {}),
+                cwd,
+                created: new Date().toISOString(),
+              },
+              ownershipFileOps(config.ownershipDirectory ?? ownershipDirectory()),
+            );
+            const proxyStartTime = await processStartTime(session.ownerPid, true);
+            await appendProxyLedgerEntry(
+              {
+                version: 1,
+                sessionUuid: session.uuid,
+                proxyPid: session.ownerPid,
+                ...(proxyStartTime ? { proxyStartTime } : {}),
+                ownerPid: pid,
+                ...(starterStartTime ? { ownerStartTime: starterStartTime } : {}),
                 cwd,
                 created: new Date().toISOString(),
               },
@@ -631,7 +651,37 @@ export function makeProjectKeyFerryManager(
               config.commandTimeoutMs,
               ambientEnvironment,
             ).pipe(
-              Effect.as(true),
+              Effect.flatMap(() => {
+                const verify = (attempt: number): Effect.Effect<boolean, never> =>
+                  runCommand(
+                    processService,
+                    config,
+                    cwd,
+                    ["proxy", "status", "--format", "json"],
+                    config.commandTimeoutMs,
+                    ambientEnvironment,
+                  ).pipe(
+                    Effect.flatMap(({ stdout }) => {
+                      try {
+                        if (
+                          !decodeSessionList(stdout).some(
+                            (item) => item.uuid === session.uuid && item.endedAt === undefined,
+                          )
+                        )
+                          return Effect.succeed(true);
+                      } catch {
+                        // A malformed/failed status is inconclusive.
+                      }
+                      return attempt < 3
+                        ? Effect.sleep(Duration.millis(config.pollIntervalMs)).pipe(
+                            Effect.andThen(verify(attempt + 1)),
+                          )
+                        : Effect.succeed(false);
+                    }),
+                    Effect.catch(() => Effect.succeed(false)),
+                  );
+                return verify(1);
+              }),
               Effect.catch(() =>
                 Effect.sync(() => {
                   config.lifecycleLogger?.({
@@ -827,6 +877,28 @@ export function makeProjectKeyFerryManager(
           }),
         );
 
+      const recoverStartFailure = (error: VarlockError, cleanupDirectory: string | undefined) =>
+        Effect.gen(function* () {
+          if (error.code !== "disposed") updateFailure(error);
+          yield* cleanupFailedStart(cleanupDirectory);
+          const failure = error;
+          return yield* Effect.fail(failure);
+        });
+      const updateFailure = (failure: VarlockError) => {
+        if (state.phase === "failed" && state.session) state.error = failure;
+        else clearCapability("failed", failure);
+      };
+      const cleanupFailedStart = (directory: string | undefined) =>
+        directory && !state.session
+          ? Effect.gen(function* () {
+              if (certDirectory === directory) {
+                certDirectory = undefined;
+                certDirectoryReal = undefined;
+              }
+              yield* removeOwnedDirectory(directory);
+            })
+          : Effect.void;
+
       const startInternal = (): Effect.Effect<SafeStatus, VarlockError> => {
         let acquired: ManagedProcess | undefined;
         let cleanupDirectory: string | undefined;
@@ -858,7 +930,10 @@ export function makeProjectKeyFerryManager(
                 .spawn({
                   ...parts,
                   cwd,
-                  env: ambientEnvironment,
+                  // Varlock versions that expose inherited metadata in
+                  // `proxy status` can use this to identify recordless
+                  // proxies. Older versions simply ignore the variable.
+                  env: { ...ambientEnvironment, KEY_FERRY_PROXY_MARKER: "key-ferry" },
                   terminateGraceMs: 500,
                 })
                 .pipe(Effect.mapError((error) => fromProcessError(error, "start_failed"))),
@@ -905,18 +980,7 @@ export function makeProjectKeyFerryManager(
             state.error = undefined;
             return statusSnapshot(state, cwd);
           }).pipe(
-            Effect.catch((error) =>
-              Effect.gen(function* () {
-                const failure = error ?? safeError("start_failed", true);
-                if (failure.code !== "disposed") {
-                  // A failed post-capture stop must retain the session so the
-                  // finalizer can retry the exact UUID without deleting its record.
-                  if (state.phase === "failed" && state.session) state.error = failure;
-                  else clearCapability("failed", failure);
-                }
-                return yield* Effect.fail(failure);
-              }),
-            ),
+            Effect.catch((error) => recoverStartFailure(error, cleanupDirectory)),
             Effect.onInterrupt(() => interruptedStartCleanup(acquired, cleanupDirectory)),
           );
         });

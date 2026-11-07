@@ -298,7 +298,9 @@ describe("doctor remote relay recovery", () => {
           localUrl: `http://127.0.0.1:${5000 + relayNumber}`,
           downstreamToken: token,
           health: Effect.sync(() => ({
-            listening: healthy,
+            // The first relay is the one made unhealthy by the test; a
+            // replacement represents the recovered broker.
+            listening: healthy || relayNumber > 1,
             activeRequests: 0,
             localUrl: `http://127.0.0.1:${5000 + relayNumber}`,
           })),
