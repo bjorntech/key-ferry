@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.15 — 2026-11-07
+
+### Fixed
+
+- Rebuild stale remote relays when broker bindings, credentials, or generations
+  change, and stop orphaned relays safely during recovery.
+
+- Persist proxy ownership in a durable ledger and reap stale sessions only when
+  process identity and ownership markers match, including Linux `/proc` support.
+
+- Preserve fail-closed remote protection and lifecycle diagnostics while reducing
+  recovery complexity and keeping native MCP configuration intact.
+
 ## 0.1.14 — 2026-11-06
 
 ### Fixed
