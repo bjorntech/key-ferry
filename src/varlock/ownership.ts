@@ -24,12 +24,18 @@ export const START_TIME_TOLERANCE_MS = 5_000;
 /** Converts ISO, `ps lstart`, epoch, and our canonical values to milliseconds. */
 export function normalizeStartTime(value: string | undefined): number | undefined {
   if (!value) return undefined;
-  const canonical = /^ms:(\d+)$/.exec(value);
-  if (canonical) return Number(canonical[1]);
-  if (/^\d+$/.test(value)) {
-    const numeric = Number(value);
-    return numeric < 100_000_000_000 ? numeric * 1_000 : numeric;
-  }
+  return parseCanonicalStart(value) ?? parseNumericStart(value) ?? parseDateStart(value);
+}
+function parseCanonicalStart(value: string): number | undefined {
+  const match = /^ms:(\d+)$/.exec(value);
+  return match ? Number(match[1]) : undefined;
+}
+function parseNumericStart(value: string): number | undefined {
+  if (!/^\d+$/.test(value)) return undefined;
+  const numeric = Number(value);
+  return numeric < 100_000_000_000 ? numeric * 1_000 : numeric;
+}
+function parseDateStart(value: string): number | undefined {
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : undefined;
 }
@@ -300,12 +306,20 @@ function publishedRecord(record: BrokerOwnershipRecord, directory: string) {
     ...optionalStartTime(starterStartTime),
     cwd: record.cwd ?? directory,
     created: record.created,
-    ...(record.proxyPid === undefined ? {} : { proxyPid: record.proxyPid }),
-    ...(record.proxyStartTime === undefined ? {} : { proxyStartTime: record.proxyStartTime }),
-    ...(record.certDirectory === undefined ? {} : { certDirectory: record.certDirectory }),
-    ...(record.hostPid === undefined ? {} : { hostPid: record.hostPid }),
-    ...(record.hostStartTime === undefined ? {} : { hostStartTime: record.hostStartTime }),
+    ...optionalRecordFields(record),
   };
+}
+function optionalRecordFields(record: BrokerOwnershipRecord) {
+  return {
+    ...optionalField("proxyPid", record.proxyPid),
+    ...optionalField("proxyStartTime", record.proxyStartTime),
+    ...optionalField("certDirectory", record.certDirectory),
+    ...optionalField("hostPid", record.hostPid),
+    ...optionalField("hostStartTime", record.hostStartTime),
+  };
+}
+function optionalField(key: string, value: unknown): Record<string, unknown> {
+  return value === undefined ? {} : { [key]: value };
 }
 function optionalStartTime(value: string | undefined): {
   starterStartTime?: string;
@@ -545,31 +559,72 @@ async function findOrphanOwner(
   const entry = ledger.find((item) =>
     matchesLedgerEntry(item, session.uuid, proxyPid, session.startTime),
   );
-  const mismatchedEntry = ledger.some(
-    (item) => item.sessionUuid === session.uuid && item.proxyPid === proxyPid && item !== entry,
+  if (!orphanLedgerMatches(ledger, session.uuid, proxyPid, entry)) return undefined;
+  if (!(await hasPositiveOwnership(entry, session, proxyPid, verifier))) return undefined;
+  if (await ledgerHostIsAlive(entry, proxyPid, verifier)) return undefined;
+  const ownerPid = entry?.ownerPid ?? proxyPid;
+  if (await liveLedgerOwner(entry, ownerPid, verifier)) return undefined;
+  return orphanOwnerCandidate(entry, ownerPid, session, proxyPid, verifier);
+}
+async function liveLedgerOwner(
+  entry: ProxyLedgerEntry | undefined,
+  ownerPid: number,
+  verifier: OwnershipVerifier,
+): Promise<boolean> {
+  return (
+    entry?.ownerPid !== undefined && (await ownerAlive(ownerPid, entry.ownerStartTime, verifier))
   );
-  if (mismatchedEntry) return undefined;
-  if (!(await hasPositiveOwnership(entry, session, proxyPid, verifier)) || !verifier.isAlive)
-    return undefined;
-  const ownerPid = entry?.ownerPid;
-  const hostPid = entry?.hostPid ?? ownerPid;
-  const hostStartTime = entry?.hostStartTime ?? entry?.ownerStartTime;
-  if (
-    hostPid !== undefined &&
-    (await ownerAlive(hostPid, hostStartTime, verifier)) &&
-    (entry?.hostPid !== undefined || !legacySelfOwnership(entry, proxyPid))
-  )
-    return undefined;
-  if (ownerPid === undefined || legacySelfOwnership(entry, proxyPid))
-    return (await verifiedOrphanProcess(session, proxyPid, verifier))
-      ? { entry, ownerPid: proxyPid }
-      : undefined;
-  if (!(await ownerAlive(ownerPid, entry?.ownerStartTime, verifier))) {
-    return (await verifiedOrphanProcess(session, proxyPid, verifier))
-      ? { entry, ownerPid }
-      : undefined;
-  }
-  return undefined;
+}
+async function orphanOwnerCandidate(
+  entry: ProxyLedgerEntry | undefined,
+  ownerPid: number,
+  session: { startedAt?: string; startTime?: string },
+  proxyPid: number,
+  verifier: OwnershipVerifier,
+): Promise<{ entry: ProxyLedgerEntry | undefined; ownerPid: number } | undefined> {
+  return (await verifiedOrphanProcess(session, proxyPid, verifier))
+    ? { entry, ownerPid }
+    : undefined;
+}
+function orphanLedgerMatches(
+  ledger: ProxyLedgerEntry[],
+  uuid: string,
+  pid: number,
+  entry: ProxyLedgerEntry | undefined,
+): boolean {
+  return !hasMismatchedLedgerEntry(ledger, uuid, pid, entry);
+}
+function hasMismatchedLedgerEntry(
+  ledger: ProxyLedgerEntry[],
+  uuid: string,
+  pid: number,
+  entry: ProxyLedgerEntry | undefined,
+): boolean {
+  return ledger.some(
+    (item) => item.sessionUuid === uuid && item.proxyPid === pid && item !== entry,
+  );
+}
+async function ledgerHostIsAlive(
+  entry: ProxyLedgerEntry | undefined,
+  proxyPid: number,
+  verifier: OwnershipVerifier,
+): Promise<boolean> {
+  if (!entry) return false;
+  const hostPid = entry.hostPid ?? entry.ownerPid;
+  const hostStart = entry.hostStartTime ?? entry.ownerStartTime;
+  return (
+    hostPid !== undefined && (await liveHostPid(hostPid, hostStart, entry, proxyPid, verifier))
+  );
+}
+async function liveHostPid(
+  hostPid: number,
+  hostStart: string | undefined,
+  entry: ProxyLedgerEntry,
+  proxyPid: number,
+  verifier: OwnershipVerifier,
+): Promise<boolean> {
+  if (!(await ownerAlive(hostPid, hostStart, verifier))) return false;
+  return entry.hostPid !== undefined || !legacySelfOwnership(entry, proxyPid);
 }
 
 function legacySelfOwnership(entry: ProxyLedgerEntry | undefined, proxyPid: number): boolean {
@@ -586,24 +641,50 @@ async function verifiedOrphanProcess(
   proxyPid: number,
   verifier: OwnershipVerifier,
 ): Promise<boolean> {
-  if (!verifier.isAlive || !verifier.command || !verifier.parentPid || !verifier.processEnv)
-    return false;
-  if (!(await verifier.isAlive(proxyPid))) return false;
-  const command = await verifier.command(proxyPid);
-  const parent = await verifier.parentPid(proxyPid);
-  const env = await verifier.processEnv(proxyPid);
-  if (
-    !command ||
-    parent !== 1 ||
-    !(await isVerifiedInit(verifier)) ||
-    !env ||
-    env.KEY_FERRY_PROXY_MARKER !== "key-ferry"
-  )
-    return false;
-  if (!isProxyStartCommand(command)) return false;
-  const startedAt = session.startedAt ? Date.parse(session.startedAt) : NaN;
-  const now = verifier.now?.() ?? Date.now();
-  return Number.isFinite(startedAt) && now - startedAt >= ORPHAN_GRACE_MS;
+  const identity = await readOrphanIdentity(proxyPid, verifier);
+  return (
+    identity !== undefined &&
+    (await isVerifiedInit(verifier)) &&
+    isProxyStartCommand(identity.command) &&
+    orphanAgeElapsed(session.startedAt, verifier.now?.() ?? Date.now())
+  );
+}
+async function readOrphanIdentity(
+  pid: number,
+  verifier: OwnershipVerifier,
+): Promise<{ command: readonly string[] } | undefined> {
+  if (!hasOrphanIdentityVerifiers(verifier)) return undefined;
+  if (!(await verifier.isAlive(pid))) return undefined;
+  return readVerifiedOrphanCommand(pid, verifier);
+}
+async function readVerifiedOrphanCommand(
+  pid: number,
+  verifier: OwnershipVerifier & {
+    command: NonNullable<OwnershipVerifier["command"]>;
+    parentPid: NonNullable<OwnershipVerifier["parentPid"]>;
+    processEnv: NonNullable<OwnershipVerifier["processEnv"]>;
+  },
+): Promise<{ command: readonly string[] } | undefined> {
+  const command = await verifier.command(pid);
+  if (!command || !(await parentIsInit(pid, verifier))) return undefined;
+  return hasProxyMarker(await verifier.processEnv(pid)) ? { command } : undefined;
+}
+function hasOrphanIdentityVerifiers(
+  verifier: OwnershipVerifier,
+): verifier is OwnershipVerifier &
+  Required<Pick<OwnershipVerifier, "isAlive" | "command" | "parentPid" | "processEnv">> {
+  return Boolean(verifier.isAlive && verifier.command && verifier.parentPid && verifier.processEnv);
+}
+function hasProxyMarker(env: Readonly<Record<string, string>> | undefined): boolean {
+  return env?.KEY_FERRY_PROXY_MARKER === "key-ferry";
+}
+async function parentIsInit(pid: number, verifier: OwnershipVerifier): Promise<boolean> {
+  return (await verifier.parentPid?.(pid)) === 1;
+}
+function orphanAgeElapsed(startedAt: string | undefined, now: number): boolean {
+  if (!startedAt) return false;
+  const started = Date.parse(startedAt);
+  return Number.isFinite(started) && now - started >= ORPHAN_GRACE_MS;
 }
 
 function isProxyStartCommand(command: readonly string[]): boolean {
@@ -611,15 +692,23 @@ function isProxyStartCommand(command: readonly string[]): boolean {
   const start =
     proxy < 0 ? -1 : command.findIndex((part, index) => index > proxy && part === "start");
   const cert = command.findIndex((part) => part === "--cert-dir");
-  if (proxy < 1 || start < 0 || cert < 0 || cert + 1 >= command.length) return false;
+  return validProxyCommandShape(command, proxy, start, cert) && validCertDir(command[cert + 1]!);
+}
+function validProxyCommandShape(
+  command: readonly string[],
+  proxy: number,
+  start: number,
+  cert: number,
+): boolean {
+  if (!hasProxyArguments(proxy, start, cert, command.length)) return false;
   const executable = basename(command[0] ?? "");
-  const directory = command[cert + 1]!;
-  return (
-    executable === "varlock" &&
-    command[proxy - 1] === executable &&
-    directory.startsWith(`${tmpdir()}/`) &&
-    basename(directory).startsWith("key-ferry-cert-")
-  );
+  return executable === "varlock" && command[proxy - 1] === executable;
+}
+function hasProxyArguments(proxy: number, start: number, cert: number, length: number): boolean {
+  return proxy >= 1 && start >= 0 && cert >= 0 && cert + 1 < length;
+}
+function validCertDir(directory: string): boolean {
+  return directory.startsWith(`${tmpdir()}/`) && basename(directory).startsWith("key-ferry-cert-");
 }
 
 // These are known PID-1 reapers commonly used by Linux hosts/containers.
@@ -743,16 +832,24 @@ async function hostIdentityVetoesStop(
 ): Promise<boolean> {
   if (record.hostPid === undefined) return false;
   if (!record.hostStartTime || !verifier.isAlive || !verifier.startTime) return true;
-  let alive: boolean;
+  return await hostIdentityMatches(record.hostPid, record.hostStartTime, verifier);
+}
+async function hostIdentityMatches(
+  pid: number,
+  expected: string,
+  verifier: OwnershipVerifier,
+): Promise<boolean> {
+  const alive = await safeAlive(pid, verifier);
+  if (!alive) return false;
   try {
-    alive = await verifier.isAlive(record.hostPid);
+    return startTimesMatch(await verifier.startTime!(pid), expected);
   } catch {
     return true;
   }
-  if (!alive) return false;
+}
+async function safeAlive(pid: number, verifier: OwnershipVerifier): Promise<boolean> {
   try {
-    const actual = await verifier.startTime(record.hostPid);
-    return startTimesMatch(actual, record.hostStartTime);
+    return await verifier.isAlive!(pid);
   } catch {
     return true;
   }
@@ -832,18 +929,56 @@ async function reapActiveRecord(
     await removeInactiveRecord(record, verifier, ops);
     return { reaped: 1, skipped: 0 };
   }
+  return reapActiveSession(record, active, verifier, ops);
+}
+async function reapActiveSession(
+  record: BrokerOwnershipRecord,
+  active: {
+    ownerPid?: number;
+    startedAt?: string;
+    startTime?: string;
+  },
+  verifier: OwnershipVerifier,
+  ops: OwnershipFileOps,
+): Promise<{ reaped: number; skipped: number }> {
   const proxyPid = active.ownerPid ?? record.proxyPid ?? record.starterPid;
-  if (
-    proxyPid === record.starterPid &&
-    legacyRecord(record) &&
-    (await verifiedOrphanProcess(active, proxyPid, verifier))
-  ) {
-    return reapOwnedRecord(record, verifier, ops);
-  }
-  if (await starterStillOwned(record, verifier)) return { reaped: 0, skipped: 1 };
-  if (record.hostPid !== undefined && !(await verifiedOrphanProcess(active, proxyPid, verifier)))
-    return { reaped: 0, skipped: 1 };
+  const orphan = await maybeReapLegacyActive(record, active, proxyPid, verifier, ops);
+  if (orphan) return orphan;
+  if (await activeOwnerStillValid(record, active, proxyPid, verifier)) return skippedReap();
   return reapOwnedRecord(record, verifier, ops);
+}
+async function activeOwnerStillValid(
+  record: BrokerOwnershipRecord,
+  active: { ownerPid?: number; startedAt?: string; startTime?: string },
+  proxyPid: number,
+  verifier: OwnershipVerifier,
+): Promise<boolean> {
+  if (await starterStillOwned(record, verifier)) return true;
+  return record.hostPid !== undefined && !(await verifiedOrphanProcess(active, proxyPid, verifier));
+}
+function skippedReap(): { reaped: number; skipped: number } {
+  return { reaped: 0, skipped: 1 };
+}
+async function maybeReapLegacyActive(
+  record: BrokerOwnershipRecord,
+  active: { ownerPid?: number; startedAt?: string; startTime?: string },
+  proxyPid: number,
+  verifier: OwnershipVerifier,
+  ops: OwnershipFileOps,
+): Promise<{ reaped: number; skipped: number } | undefined> {
+  if (!legacyRecord(record) || proxyPid !== record.starterPid) return undefined;
+  return reapLegacyActive(record, active, verifier, ops);
+}
+async function reapLegacyActive(
+  record: BrokerOwnershipRecord,
+  active: { ownerPid?: number; startedAt?: string; startTime?: string },
+  verifier: OwnershipVerifier,
+  ops: OwnershipFileOps,
+): Promise<{ reaped: number; skipped: number } | undefined> {
+  const pid = active.ownerPid ?? record.proxyPid ?? record.starterPid;
+  return (await verifiedOrphanProcess(active, pid, verifier))
+    ? reapOwnedRecord(record, verifier, ops)
+    : undefined;
 }
 
 function legacyRecord(record: BrokerOwnershipRecord): boolean {
@@ -856,22 +991,36 @@ async function removeInactiveRecord(
   ops: OwnershipFileOps,
 ): Promise<void> {
   const proxyPid = record.proxyPid ?? (legacyRecord(record) ? record.starterPid : undefined);
-  if (proxyPid !== undefined && (await proxyIsAlive(proxyPid, record, verifier))) {
-    if (await hostIdentityVetoesStop(record, verifier)) return;
-    const command = verifier.command ? await verifier.command(proxyPid) : undefined;
-    const orphan = await verifiedOrphanProcess(
-      { startedAt: record.created, startTime: record.proxyStartTime },
-      proxyPid,
-      verifier,
-    );
-    if (!orphan || !command) return;
-    await verifier.stop(record);
-    if (await proxyIsAlive(proxyPid, record, verifier)) return;
-  }
+  if (proxyPid !== undefined && (await inactiveProxyRemains(proxyPid, record, verifier))) return;
   await retireInactiveLedger(record, verifier, ops);
   await removeOwnershipRecord(record.brokerKeyHash, ops);
   lifecycleLoggers.forEach((l) =>
     l({ event: "stale-reaped", keyHash: record.brokerKeyHash.slice(0, 12), directory: record.cwd }),
+  );
+}
+async function inactiveProxyRemains(
+  pid: number,
+  record: BrokerOwnershipRecord,
+  verifier: OwnershipVerifier,
+): Promise<boolean> {
+  if (!(await proxyIsAlive(pid, record, verifier))) return false;
+  if (await hostIdentityVetoesStop(record, verifier)) return true;
+  if (!(await inactiveProxyVerified(pid, record, verifier))) return true;
+  await verifier.stop(record);
+  return await proxyIsAlive(pid, record, verifier);
+}
+async function inactiveProxyVerified(
+  pid: number,
+  record: BrokerOwnershipRecord,
+  verifier: OwnershipVerifier,
+): Promise<boolean> {
+  if (!verifier.command) return false;
+  const command = await verifier.command(pid);
+  if (!command) return false;
+  return verifiedOrphanProcess(
+    { startedAt: record.created, startTime: record.proxyStartTime },
+    pid,
+    verifier,
   );
 }
 
@@ -978,20 +1127,21 @@ async function readProcessEnvironment(
 }
 
 async function readParentPid(pid: number): Promise<number | undefined> {
-  try {
-    if (process.platform === "linux") {
-      const stat = await readFile(`/proc/${pid}/stat`, "utf8");
-      const end = stat.lastIndexOf(") ");
-      const fields = stat.slice(end + 2).split(" ");
-      const parent = Number(fields[1]);
-      return Number.isSafeInteger(parent) ? parent : undefined;
-    }
-    const result = await exec("ps", ["-o", "ppid=", "-p", String(pid)], { timeout: 2_000 });
-    const parent = Number(result.stdout.trim());
-    return Number.isSafeInteger(parent) ? parent : undefined;
-  } catch {
-    return undefined;
-  }
+  return readParentPidUnsafe(pid).catch(() => undefined);
+}
+function readParentPidUnsafe(pid: number): Promise<number | undefined> {
+  return process.platform === "linux" ? readLinuxParentPid(pid) : readPsParentPid(pid);
+}
+async function readLinuxParentPid(pid: number): Promise<number | undefined> {
+  const stat = await readFile(`/proc/${pid}/stat`, "utf8");
+  const end = stat.lastIndexOf(") ");
+  const parent = Number(stat.slice(end + 2).split(" ")[1]);
+  return Number.isSafeInteger(parent) ? parent : undefined;
+}
+async function readPsParentPid(pid: number): Promise<number | undefined> {
+  const result = await exec("ps", ["-o", "ppid=", "-p", String(pid)], { timeout: 2_000 });
+  const parent = Number(result.stdout.trim());
+  return Number.isSafeInteger(parent) ? parent : undefined;
 }
 
 async function readProcessCommand(pid: number): Promise<readonly string[] | undefined> {
@@ -1033,42 +1183,104 @@ async function sweepCertDirectories(
   verifier: OwnershipVerifier,
   ops: OwnershipFileOps,
 ): Promise<void> {
-  if (!verifier.listProcesses) return;
-  const root = await canonicalPath(verifier.tempDirectory ?? tmpdir());
-  if (!root) return;
-  let names: string[];
+  const candidates = await sweepCandidates(verifier, ops);
+  if (!candidates) return;
+  for (const candidate of candidates)
+    await sweepCandidate(candidate.path, candidate.uid, records, sessions, verifier, ops);
+}
+async function sweepCandidates(
+  verifier: OwnershipVerifier,
+  ops: OwnershipFileOps,
+): Promise<{ path: string; uid: number | undefined }[] | undefined> {
+  if (!verifier.listProcesses) return undefined;
+  const root = await sweepRoot(verifier);
+  if (!root) return undefined;
+  const names = await readCandidateNames(root, ops);
+  if (!names) return undefined;
+  const uid = currentUid();
+  return names.map((name) => ({ path: join(root, name), uid }));
+}
+async function sweepRoot(verifier: OwnershipVerifier): Promise<string | undefined> {
+  return canonicalPath(verifier.tempDirectory ?? tmpdir());
+}
+function currentUid(): number | undefined {
+  return typeof process.getuid === "function" ? process.getuid() : undefined;
+}
+async function readCandidateNames(
+  root: string,
+  ops: OwnershipFileOps,
+): Promise<string[] | undefined> {
   try {
-    names = await (ops.readdir ?? readdir)(root);
+    return (await (ops.readdir ?? readdir)(root)).filter((name) =>
+      name.startsWith("key-ferry-cert-"),
+    );
   } catch {
-    return;
+    return undefined;
   }
-  const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
-  for (const name of names) {
-    if (!name.startsWith("key-ferry-cert-")) continue;
-    const path = join(root, name);
-    try {
-      const info = await (ops.lstat ?? lstat)(path);
-      if (info.isSymbolicLink() || !info.isDirectory() || (uid !== undefined && info.uid !== uid))
-        continue;
-      const currentProcesses = await verifier.listProcesses();
-      if (!currentProcesses) return;
-      const referenced = await referencedCertDirectories(records, sessions, currentProcesses);
-      const candidate = await canonicalPath(path);
-      if (!candidate || candidate !== path || referenced.has(candidate)) continue;
-      const latest = await (ops.lstat ?? lstat)(path);
-      const now = verifier.now?.() ?? Date.now();
-      if (
-        latest.isSymbolicLink() ||
-        !latest.isDirectory() ||
-        (uid !== undefined && latest.uid !== uid) ||
-        now - latest.mtimeMs < ORPHAN_GRACE_MS
-      )
-        continue;
+}
+async function sweepCandidate(
+  path: string,
+  uid: number | undefined,
+  records: readonly BrokerOwnershipRecord[],
+  sessions: readonly { env?: Readonly<Record<string, string>> }[],
+  verifier: OwnershipVerifier,
+  ops: OwnershipFileOps,
+): Promise<void> {
+  try {
+    if (await shouldSweepCandidate(path, uid, records, sessions, verifier, ops))
       await ops.rm(path, { recursive: true, force: true });
-    } catch {
-      /* Best effort; never make reaping fail. */
-    }
+  } catch {
+    /* Best effort; never make reaping fail. */
   }
+}
+async function shouldSweepCandidate(
+  path: string,
+  uid: number | undefined,
+  records: readonly BrokerOwnershipRecord[],
+  sessions: readonly { env?: Readonly<Record<string, string>> }[],
+  verifier: OwnershipVerifier,
+  ops: OwnershipFileOps,
+): Promise<boolean> {
+  if (!(await ownedOldDirectory(path, uid, verifier, ops))) return false;
+  const candidate = await canonicalPath(path);
+  if (!candidate || candidate !== path) return false;
+  if (await referencedCandidate(candidate, records, sessions, verifier)) return false;
+  return ownedOldDirectory(path, uid, verifier, ops);
+}
+async function removeIfStillOwned(
+  path: string,
+  uid: number | undefined,
+  verifier: OwnershipVerifier,
+  ops: OwnershipFileOps,
+): Promise<void> {
+  if (await ownedOldDirectory(path, uid, verifier, ops))
+    await ops.rm(path, { recursive: true, force: true });
+}
+async function ownedOldDirectory(
+  path: string,
+  uid: number | undefined,
+  verifier: OwnershipVerifier,
+  ops: OwnershipFileOps,
+): Promise<boolean> {
+  const info = await (ops.lstat ?? lstat)(path);
+  return validOwnedDirectory(info, uid) && oldEnough(info.mtimeMs, verifier);
+}
+function validOwnedDirectory(info: any, uid: number | undefined): boolean {
+  return !info.isSymbolicLink() && info.isDirectory() && (uid === undefined || info.uid === uid);
+}
+function oldEnough(mtimeMs: number, verifier: OwnershipVerifier): boolean {
+  return (verifier.now?.() ?? Date.now()) - mtimeMs >= ORPHAN_GRACE_MS;
+}
+async function referencedCandidate(
+  candidate: string,
+  records: readonly BrokerOwnershipRecord[],
+  sessions: readonly { env?: Readonly<Record<string, string>> }[],
+  verifier: OwnershipVerifier,
+): Promise<boolean> {
+  const processes = await verifier.listProcesses!();
+  if (!processes) return true;
+  const referenced = await referencedCertDirectories(records, sessions, processes);
+  return referenced.has(candidate);
 }
 
 async function canonicalPath(path: string): Promise<string | undefined> {
@@ -1084,22 +1296,21 @@ async function referencedCertDirectories(
   sessions: readonly { env?: Readonly<Record<string, string>> }[],
   processes: readonly { command: readonly string[] }[],
 ): Promise<Set<string>> {
-  const values: string[] = [];
-  for (const process of processes) {
-    const directory = certDirectoryFromCommand(process.command);
-    if (directory) values.push(directory);
-  }
-  for (const record of records) if (record.certDirectory) values.push(record.certDirectory);
-  for (const session of sessions) {
-    const directory = session.env?.NODE_EXTRA_CA_CERTS?.replace(/\/ca-cert\.pem$/, "");
-    if (directory) values.push(directory);
-  }
+  const values = [
+    ...processes.flatMap((process) => certDirectoryFromCommand(process.command) ?? []),
+    ...records.flatMap((record) => (record.certDirectory ? [record.certDirectory] : [])),
+    ...sessions.flatMap((session) => sessionCertDirectory(session.env)),
+  ];
   const result = new Set<string>();
   for (const value of values) {
     const canonical = await canonicalPath(value);
     if (canonical) result.add(canonical);
   }
   return result;
+}
+function sessionCertDirectory(env?: Readonly<Record<string, string>>): string[] {
+  const value = env?.NODE_EXTRA_CA_CERTS?.replace(/\/ca-cert\.pem$/, "");
+  return value ? [value] : [];
 }
 
 function processEnvironmentCommand(pid: number): [string, string[]] {
@@ -1167,11 +1378,22 @@ export async function starterStillOwned(
   record: BrokerOwnershipRecord,
   verifier: OwnershipVerifier,
 ): Promise<boolean> {
-  if (record.hostPid !== undefined) {
-    if (!record.hostStartTime || !verifier.isAlive || !verifier.startTime) return false;
-    if (!(await verifier.isAlive(record.hostPid))) return false;
-    return startTimesMatch(await verifier.startTime(record.hostPid), record.hostStartTime);
-  }
+  return record.hostPid !== undefined
+    ? hostStillOwned(record, verifier)
+    : legacyStarterStillOwned(record, verifier);
+}
+async function hostStillOwned(
+  record: BrokerOwnershipRecord,
+  verifier: OwnershipVerifier,
+): Promise<boolean> {
+  if (!record.hostStartTime || !verifier.isAlive || !verifier.startTime) return false;
+  if (!(await verifier.isAlive(record.hostPid!))) return false;
+  return startTimesMatch(await verifier.startTime!(record.hostPid!), record.hostStartTime);
+}
+async function legacyStarterStillOwned(
+  record: BrokerOwnershipRecord,
+  verifier: OwnershipVerifier,
+): Promise<boolean> {
   if (!hasStarterVerifier(record, verifier)) return false;
   const isAlive = verifier.isAlive;
   const getStartTime = verifier.startTime;

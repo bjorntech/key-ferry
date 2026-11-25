@@ -48,6 +48,96 @@ const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
 const MAX_TIMEOUT = 10 * 60_000;
 const DEFAULT_HEALTH_CHECK_INTERVAL = 1_000;
 
+async function persistOwnershipArtifacts(
+  session: VarlockSessionRecord,
+  cwd: string,
+  certDirectory: string,
+  brokerKeyHash: string,
+  hostStartTime: string | undefined,
+  proxyStartTimeRaw: string | undefined,
+  proxyStartTime: string | undefined,
+  directory: string,
+): Promise<void> {
+  const created = new Date().toISOString();
+  const ops = ownershipFileOps(directory);
+  await writeOwnershipRecord(
+    ownershipRecordPayload(
+      session,
+      cwd,
+      certDirectory,
+      brokerKeyHash,
+      created,
+      hostStartTime,
+      proxyStartTimeRaw,
+      proxyStartTime,
+    ),
+    ops,
+  );
+  await appendProxyLedgerEntry(
+    ledgerRecordPayload(
+      session,
+      cwd,
+      certDirectory,
+      created,
+      hostStartTime,
+      proxyStartTimeRaw,
+      proxyStartTime,
+    ),
+    ops,
+  );
+}
+function ownershipRecordPayload(
+  session: VarlockSessionRecord,
+  cwd: string,
+  certDirectory: string,
+  brokerKeyHash: string,
+  created: string,
+  hostStartTime: string | undefined,
+  proxyStartTimeRaw: string | undefined,
+  proxyStartTime: string | undefined,
+) {
+  return {
+    brokerKeyHash,
+    version: 2 as const,
+    sessionUuid: session.uuid,
+    starterPid: session.ownerPid,
+    ...optionalValue("starterStartTime", proxyStartTimeRaw),
+    cwd,
+    created,
+    proxyPid: session.ownerPid,
+    ...optionalValue("proxyStartTime", proxyStartTime),
+    certDirectory,
+    hostPid: process.pid,
+    ...optionalValue("hostStartTime", hostStartTime),
+  };
+}
+function ledgerRecordPayload(
+  session: VarlockSessionRecord,
+  cwd: string,
+  certDirectory: string,
+  created: string,
+  hostStartTime: string | undefined,
+  proxyStartTimeRaw: string | undefined,
+  proxyStartTime: string | undefined,
+) {
+  return {
+    version: 1 as const,
+    sessionUuid: session.uuid,
+    proxyPid: session.ownerPid,
+    ...optionalValue("proxyStartTime", proxyStartTime),
+    ownerPid: session.ownerPid,
+    ...optionalValue("ownerStartTime", proxyStartTimeRaw),
+    cwd,
+    created,
+    certDirectory,
+    hostPid: process.pid,
+    ...optionalValue("hostStartTime", hostStartTime),
+  };
+}
+function optionalValue(key: string, value: string | undefined): Record<string, string> {
+  return value === undefined ? {} : { [key]: value };
+}
+
 type AdapterOptions = {
   command: readonly string[];
   environmentKeys: readonly string[];
@@ -575,43 +665,16 @@ export function makeProjectKeyFerryManager(
             const hostStartTime = canonicalStartTime(await processStartTime(process.pid, true));
             const proxyStartTimeRaw = await processStartTime(session.ownerPid, true);
             const proxyStartTime = canonicalStartTime(proxyStartTimeRaw);
-            await writeOwnershipRecord(
-              {
-                brokerKeyHash: (ownershipHash = createHash("sha256")
-                  .update(`${cwd}\0${session.uuid}`)
-                  .digest("hex")),
-                // 0.1.17 accepts v2 plus unknown fields. Keep starterPid as
-                // the proxy PID so its old reaper continues to vouch for this
-                // healthy sidecar; new code uses hostPid/hostStartTime.
-                version: 2,
-                sessionUuid: session.uuid,
-                starterPid: session.ownerPid,
-                ...(proxyStartTimeRaw ? { starterStartTime: proxyStartTimeRaw } : {}),
-                cwd,
-                created: new Date().toISOString(),
-                proxyPid: session.ownerPid,
-                ...(proxyStartTime ? { proxyStartTime } : {}),
-                certDirectory,
-                hostPid: process.pid,
-                ...(hostStartTime ? { hostStartTime } : {}),
-              },
-              ownershipFileOps(config.ownershipDirectory ?? ownershipDirectory()),
-            );
-            await appendProxyLedgerEntry(
-              {
-                version: 1,
-                sessionUuid: session.uuid,
-                proxyPid: session.ownerPid,
-                ...(proxyStartTime ? { proxyStartTime } : {}),
-                ownerPid: session.ownerPid,
-                ...(proxyStartTimeRaw ? { ownerStartTime: proxyStartTimeRaw } : {}),
-                cwd,
-                created: new Date().toISOString(),
-                certDirectory,
-                hostPid: process.pid,
-                ...(hostStartTime ? { hostStartTime } : {}),
-              },
-              ownershipFileOps(config.ownershipDirectory ?? ownershipDirectory()),
+            ownershipHash = createHash("sha256").update(`${cwd}\0${session.uuid}`).digest("hex");
+            await persistOwnershipArtifacts(
+              session,
+              cwd,
+              certDirectory,
+              ownershipHash,
+              hostStartTime,
+              proxyStartTimeRaw,
+              proxyStartTime,
+              config.ownershipDirectory ?? ownershipDirectory(),
             );
           },
           catch: () => safeError("ownership_unavailable", false),
