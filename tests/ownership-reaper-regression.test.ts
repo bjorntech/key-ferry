@@ -31,10 +31,33 @@ async function fixture() {
   return { root, ops };
 }
 
+function psLstart(date: Date): string {
+  const weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const months = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+  ];
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${weekdays[date.getDay()]} ${months[date.getMonth()]} ${pad(date.getDate())} ${pad(
+    date.getHours(),
+  )}:${pad(date.getMinutes())}:${pad(date.getSeconds())} ${date.getFullYear()}`;
+}
+
 describe("ownership reaper regressions", () => {
+  const verifiedInit = process.platform === "darwin" ? ["launchd"] : ["init"];
   test("normalizes ISO, ps lstart, and canonical start times with tolerance", () => {
     const iso = "2026-11-25T10:00:00.000Z";
-    const lstart = "Wed Nov 25 10:00:04 2026";
+    const lstart = psLstart(new Date("2026-11-25T10:00:04.000Z"));
     expect(canonicalStartTime(iso)).toBe("ms:1795600800000");
     expect(startTimesMatch(lstart, canonicalStartTime(iso))).toBe(true);
     expect(startTimesMatch("2026-11-25T10:00:06.000Z", canonicalStartTime(iso))).toBe(false);
@@ -119,16 +142,16 @@ describe("ownership reaper regressions", () => {
       await reapOwnershipRecords({ ...base, initCommand: async () => undefined }, ops);
       expect(active).toBe(true);
       await reapOwnershipRecords(
-        { ...base, command: async () => undefined, initCommand: async () => ["launchd"] },
+        { ...base, command: async () => undefined, initCommand: async () => verifiedInit },
         ops,
       );
       expect(active).toBe(true);
       await reapOwnershipRecords(
-        { ...base, parentPid: async () => undefined, initCommand: async () => ["launchd"] },
+        { ...base, parentPid: async () => undefined, initCommand: async () => verifiedInit },
         ops,
       );
       expect(active).toBe(true);
-      await reapOwnershipRecords({ ...base, initCommand: async () => ["launchd"] }, ops);
+      await reapOwnershipRecords({ ...base, initCommand: async () => verifiedInit }, ops);
       expect(active).toBe(false);
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -497,7 +520,7 @@ describe("ownership reaper regressions", () => {
           ],
           processEnv: async () => ({ KEY_FERRY_PROXY_MARKER: "key-ferry" }),
           parentPid: async () => 1,
-          initCommand: async () => ["launchd"],
+          initCommand: async () => verifiedInit,
           stop: async () => {
             stopped = true;
             active = false;
@@ -519,7 +542,7 @@ describe("ownership reaper regressions", () => {
     await expect(
       proxyIsAlive(99, record, {
         isAlive: async () => true,
-        startTime: async () => "Wed Nov 25 10:00:04 2026",
+        startTime: async () => psLstart(new Date("2026-11-25T10:00:04.000Z")),
         stop: async () => undefined,
       }),
     ).resolves.toBe(true);

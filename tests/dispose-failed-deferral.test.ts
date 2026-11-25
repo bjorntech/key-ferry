@@ -183,11 +183,14 @@ test("failed release defers cleanup to startup reaper without losing registry st
 
   const stopCalls: string[] = [];
   let active = true;
+  const orphanProxyPid = process.pid + 1_000;
   const reaped = await reapOwnershipRecords(
     {
       status: async () =>
-        active ? [{ uuid: captured, ownerPid: 7123, startedAt: "2026-11-06T10:00:00.000Z" }] : [],
-      isAlive: async (pid: number) => pid === 7123,
+        active
+          ? [{ uuid: captured, ownerPid: orphanProxyPid, startedAt: "2026-11-06T10:00:00.000Z" }]
+          : [],
+      isAlive: async (pid: number) => pid === orphanProxyPid,
       startTime: async () => "host-start",
       command: async () => [
         "varlock",
@@ -198,7 +201,7 @@ test("failed release defers cleanup to startup reaper without losing registry st
       ],
       processEnv: async () => ({ KEY_FERRY_PROXY_MARKER: "key-ferry" }),
       parentPid: async () => 1,
-      initCommand: async () => ["launchd"],
+      initCommand: async () => (process.platform === "darwin" ? ["launchd"] : ["init"]),
       stop: async (record) => {
         stopCalls.push(record.sessionUuid);
         active = false;
