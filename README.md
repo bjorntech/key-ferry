@@ -205,10 +205,10 @@ authenticated Varlock proxy when returning to a project. Set
 `idleTimeoutMs: 0` for immediate teardown; idle brokers are always stopped on
 host shutdown or when their schema/configuration identity changes. This is a
 security/performance trade-off: resolved secrets remain in the proxy process's
-memory for up to the idle timeout after leaving a project. On startup Key Ferry
-also reaps orphaned, identity-checked proxy records left by an earlier process.
-If stopping a proxy fails during shutdown, Key Ferry keeps its ownership record and
-defers cleanup to the next startup, whose reaper retries the same session UUID.
+memory for up to the idle timeout after leaving a project. Key Ferry performs an
+orphan reconciliation pass at startup and periodically while the manager is
+alive. If stopping a proxy fails during shutdown, Key Ferry keeps its ownership
+record and defers cleanup to a later reconciliation pass.
 On SIGINT or SIGTERM it performs bounded cleanup (up to three seconds), removes
 its signal listener, and re-raises the signal when it is the only listener so
 the host's normal termination semantics are preserved; host-owned signal

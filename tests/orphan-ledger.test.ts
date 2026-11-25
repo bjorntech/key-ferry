@@ -17,6 +17,7 @@ const session = {
   cwd: "/project",
   pid: 701,
   startTime: "proxy-start",
+  startedAt: new Date(Date.now() - 120_000).toISOString(),
 };
 
 async function fixture(entry?: {
@@ -50,7 +51,16 @@ async function fixture(entry?: {
     status: async () => (alive.has(701) ? [session] : []),
     isAlive: async (pid) => alive.has(pid),
     startTime: async (pid) => (pid === 700 ? "owner-start" : "proxy-start"),
-    processEnv: async () => ({}),
+    processEnv: async () => ({ KEY_FERRY_PROXY_MARKER: "key-ferry" }),
+    command: async () => [
+      "varlock",
+      "proxy",
+      "start",
+      "--cert-dir",
+      join(tmpdir(), "key-ferry-cert-old"),
+    ],
+    parentPid: async () => 1,
+    initCommand: async () => (process.platform === "darwin" ? ["launchd"] : ["init"]),
     stop: async (record) => {
       stopped.push(record.sessionUuid);
       alive.delete(701);
@@ -90,6 +100,7 @@ test("marker in the actual process environment is positive evidence", async () =
 
 test("missing evidence, PID reuse, and unreadable environment are never reaped", async () => {
   const noEvidence = await fixture();
+  noEvidence.verifier.processEnv = async () => ({});
   expect(await reapOwnershipRecords(noEvidence.verifier, noEvidence.ops)).toEqual({
     reaped: 0,
     skipped: 0,
@@ -115,5 +126,38 @@ test("corrupt ledger lines are tolerated and entries are retired after verified 
   expect((await readProxyLedger(item.ops, item.ops.ledgerPath)).length).toBe(1);
   expect(await reapOwnershipRecords(item.verifier, item.ops)).toEqual({ reaped: 1, skipped: 0 });
   expect(await readProxyLedger(item.ops, item.ops.ledgerPath)).toEqual([]);
+  await rm(item.root, { recursive: true, force: true });
+});
+
+test("reaps a legacy self-owned orphan only after process identity proves orphanhood", async () => {
+  const item = await fixture({});
+  const sessionWithIdentity = {
+    ...session,
+    ownerPid: 701,
+    startTime: "proxy-start",
+    startedAt: new Date(Date.now() - 120_000).toISOString(),
+  };
+  let active = true;
+  const verifier: OwnershipVerifier = {
+    status: async () => (active ? [sessionWithIdentity] : []),
+    isAlive: async (pid) => pid === 701,
+    startTime: async () => "proxy-start",
+    command: async () => [
+      "varlock",
+      "proxy",
+      "start",
+      "--cert-dir",
+      join(tmpdir(), "key-ferry-cert-old"),
+    ],
+    processEnv: async () => ({ KEY_FERRY_PROXY_MARKER: "key-ferry" }),
+    parentPid: async () => 1,
+    initCommand: async () => (process.platform === "darwin" ? ["launchd"] : ["init"]),
+    stop: async (record) => {
+      item.stopped.push(record.sessionUuid);
+      active = false;
+    },
+  };
+  expect(await reapOwnershipRecords(verifier, item.ops)).toEqual({ reaped: 1, skipped: 0 });
+  expect(item.stopped).toEqual(["orphan"]);
   await rm(item.root, { recursive: true, force: true });
 });
