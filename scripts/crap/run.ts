@@ -163,6 +163,15 @@ async function main(): Promise<void> {
       warningCount: results.filter((result) => result.status === "warn").length,
       failureCount: failures.length,
     };
+    if (failures.length)
+      console.error(
+        `CRAP failures: ${failures
+          .map(
+            (metric) =>
+              `${metric.file}:${metric.line ?? "?"} ${metric.name} CC=${metric.complexity} coverage=${round(metric.coverage)} CRAP=${round(metric.crap)}`,
+          )
+          .join("; ")}`,
+      );
     if (failures.length) process.exitCode = 1;
     if (process.env.CRAP_JSON === "1" || process.argv.includes("--json")) {
       console.log(JSON.stringify(report, null, 2));
