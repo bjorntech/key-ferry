@@ -548,6 +548,19 @@ describe("ownership reaper regressions", () => {
     ).resolves.toBe(true);
   });
 
+  test("proxy liveness fails closed for missing, dead, or mismatched identities", async () => {
+    const base = { proxyStartTime: "ms:1795600800000" };
+    await expect(proxyIsAlive(99, base, {})).resolves.toBe(false);
+    await expect(proxyIsAlive(99, base, { isAlive: async () => false })).resolves.toBe(false);
+    await expect(proxyIsAlive(99, {}, { isAlive: async () => true })).resolves.toBe(true);
+    await expect(
+      proxyIsAlive(99, base, {
+        isAlive: async () => true,
+        startTime: async () => "ms:1795600806000",
+      }),
+    ).resolves.toBe(false);
+  });
+
   test("sweeps only old unreferenced cert directories", async () => {
     const { root, ops } = await fixture();
     try {
