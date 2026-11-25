@@ -32,6 +32,7 @@ function fixture(root: string) {
   let sessionUuid = "";
   let certPath = "";
   const service: ProcessService = {
+    startTime: () => Effect.succeed("host-start"),
     spawn: (input) =>
       Effect.sync(() => {
         starts += 1;
@@ -184,7 +185,20 @@ test("failed release defers cleanup to startup reaper without losing registry st
   let active = true;
   const reaped = await reapOwnershipRecords(
     {
-      status: async () => (active ? [{ uuid: captured }] : []),
+      status: async () =>
+        active ? [{ uuid: captured, ownerPid: 7123, startedAt: "2026-11-06T10:00:00.000Z" }] : [],
+      isAlive: async (pid: number) => pid === 7123,
+      startTime: async () => "host-start",
+      command: async () => [
+        "varlock",
+        "proxy",
+        "start",
+        "--cert-dir",
+        join(root, "key-ferry-cert-old"),
+      ],
+      processEnv: async () => ({ KEY_FERRY_PROXY_MARKER: "key-ferry" }),
+      parentPid: async () => 1,
+      initCommand: async () => ["launchd"],
       stop: async (record) => {
         stopCalls.push(record.sessionUuid);
         active = false;

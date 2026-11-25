@@ -127,8 +127,8 @@ test("ownership reaper stops matching and removes dead records", async () => {
     const result = await reapOwnershipRecords(
       {
         status: async () => [...active].map((uuid) => ({ uuid })),
-        isAlive: async (pid) => pid === 123,
-        startTime: async () => "start",
+        isAlive: async () => false,
+        startTime: async () => undefined,
         command: async () => ["varlock"],
         stop: async (item) => {
           stopped += 1;

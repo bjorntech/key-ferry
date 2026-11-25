@@ -28,6 +28,7 @@ import {
   writeOwnershipRecord,
   ownershipFileOps,
   ownershipDirectory,
+  canonicalStartTime,
 } from "./ownership.js";
 import {
   decodeSessionList,
@@ -61,6 +62,7 @@ type AdapterOptions = {
   }) => void;
   ownershipDirectory?: string;
   healthCheckIntervalMs: number;
+  reconciliationIntervalMs: number;
 };
 
 type ManagerFileOps = {
@@ -68,6 +70,33 @@ type ManagerFileOps = {
   realpath: typeof realpath;
   rm: typeof rm;
 };
+
+export function createReconciliationScheduler(run: () => Promise<void>, intervalMs: number) {
+  let timer: ReturnType<typeof setInterval> | undefined;
+  let inFlight = false;
+  const trigger = () => {
+    if (inFlight) return;
+    inFlight = true;
+    Promise.resolve()
+      .then(run)
+      .catch(() => undefined)
+      .finally(() => {
+        inFlight = false;
+      });
+  };
+  trigger();
+  timer = setInterval(trigger, intervalMs);
+  (timer as unknown as { unref?: () => void }).unref?.();
+  return {
+    trigger,
+    stop: () => {
+      if (timer !== undefined) {
+        clearInterval(timer);
+        timer = undefined;
+      }
+    },
+  };
+}
 
 const defaultFileOps: ManagerFileOps = { mkdtemp, realpath, rm };
 
@@ -151,6 +180,13 @@ function adapterOptions(options: ProjectKeyFerryManagerOptions): AdapterOptions 
       "healthCheckIntervalMs",
       DEFAULT_HEALTH_CHECK_INTERVAL,
       100,
+      MAX_TIMEOUT,
+    ),
+    reconciliationIntervalMs: adapterNumber(
+      raw,
+      "reconciliationIntervalMs",
+      60_000,
+      1_000,
       MAX_TIMEOUT,
     ),
     ...readLifecycleLogger(raw),
@@ -485,13 +521,17 @@ export function makeProjectKeyFerryManager(
       // released, rather than being released at the end of ensureStarted.
       const managerScope = yield* Scope.Scope;
       const config = adapterOptions(options);
-      // Stale cleanup is bounded, idempotent, and never gates MCP startup.
-      yield* Effect.promise(() =>
+      const reconcileOps = () =>
         reapStaleOwnershipRecords(
           config.command,
           ownershipFileOps(config.ownershipDirectory ?? ownershipDirectory()),
-        ),
-      ).pipe(Effect.forkDetach, Effect.asVoid);
+        );
+      // Stale cleanup is bounded, idempotent, and never gates MCP startup.
+      const reconciliation = createReconciliationScheduler(
+        reconcileOps,
+        config.reconciliationIntervalMs,
+      );
+      yield* Effect.addFinalizer(() => Effect.sync(reconciliation.stop));
       const requestedCwd = safeProjectDirectory(options.projectDirectory);
       const cwd = yield* Effect.tryPromise({
         try: async () => {
@@ -529,39 +569,47 @@ export function makeProjectKeyFerryManager(
               throw error;
             })
           : Promise.resolve(undefined);
-      const ownershipRecord = (
-        session: VarlockSessionRecord,
-        pid: number,
-        _command: readonly string[],
-      ) =>
+      const ownershipRecord = (session: VarlockSessionRecord, pid: number, certDirectory: string) =>
         Effect.tryPromise({
           try: async () => {
-            const starterStartTime = await processStartTime(pid);
+            const hostStartTime = canonicalStartTime(await processStartTime(process.pid, true));
+            const proxyStartTimeRaw = await processStartTime(session.ownerPid, true);
+            const proxyStartTime = canonicalStartTime(proxyStartTimeRaw);
             await writeOwnershipRecord(
               {
                 brokerKeyHash: (ownershipHash = createHash("sha256")
                   .update(`${cwd}\0${session.uuid}`)
                   .digest("hex")),
+                // 0.1.17 accepts v2 plus unknown fields. Keep starterPid as
+                // the proxy PID so its old reaper continues to vouch for this
+                // healthy sidecar; new code uses hostPid/hostStartTime.
                 version: 2,
                 sessionUuid: session.uuid,
-                starterPid: pid,
-                ...(starterStartTime ? { starterStartTime } : {}),
+                starterPid: session.ownerPid,
+                ...(proxyStartTimeRaw ? { starterStartTime: proxyStartTimeRaw } : {}),
                 cwd,
                 created: new Date().toISOString(),
+                proxyPid: session.ownerPid,
+                ...(proxyStartTime ? { proxyStartTime } : {}),
+                certDirectory,
+                hostPid: process.pid,
+                ...(hostStartTime ? { hostStartTime } : {}),
               },
               ownershipFileOps(config.ownershipDirectory ?? ownershipDirectory()),
             );
-            const proxyStartTime = await processStartTime(session.ownerPid, true);
             await appendProxyLedgerEntry(
               {
                 version: 1,
                 sessionUuid: session.uuid,
                 proxyPid: session.ownerPid,
                 ...(proxyStartTime ? { proxyStartTime } : {}),
-                ownerPid: pid,
-                ...(starterStartTime ? { ownerStartTime: starterStartTime } : {}),
+                ownerPid: session.ownerPid,
+                ...(proxyStartTimeRaw ? { ownerStartTime: proxyStartTimeRaw } : {}),
                 cwd,
                 created: new Date().toISOString(),
+                certDirectory,
+                hostPid: process.pid,
+                ...(hostStartTime ? { hostStartTime } : {}),
               },
               ownershipFileOps(config.ownershipDirectory ?? ownershipDirectory()),
             );
@@ -960,7 +1008,7 @@ export function makeProjectKeyFerryManager(
                   // Capture is the ownership boundary: publish before any
                   // environment or policy work can fail.
                   state.session = session;
-                  yield* ownershipRecord(session, handle.pid, [config.command[0]!, ...parts.args]);
+                  yield* ownershipRecord(session, handle.pid, certDirectory!);
                   const environment = yield* readEnvironment(session);
                   yield* validateStartupEgress(state, config.requireStrictEgress, session, handle);
                   return { session, environment };
@@ -1127,6 +1175,7 @@ export function makeProjectKeyFerryManager(
 
       const dispose = lock.withPermit(
         Effect.gen(function* () {
+          reconciliation.stop();
           if (state.disposed && !state.session) return;
           state.disposed = true;
           state.phase = "stopping";
