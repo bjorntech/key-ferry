@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.1.18 — 2026-11-25
+
+### Fixed
+
+- Reap detached Varlock proxy sidecars whose OpenCode hosts exited without
+  running shutdown hooks. Previously, ownership records named the proxy itself
+  as its starter, so those sidecars were never reaped. Ownership now records
+  the host identity separately from the proxy while remaining compatible with
+  existing ownership and ledger readers.
+- Require marker, command, certificate-directory, verified-init reparenting,
+  process-age, and host-identity checks before orphan cleanup. Preserve
+  ownership evidence across transient status misses and reconcile periodically.
+
+### Upgrade note
+
+- Restart OpenCode hosts to load this version. Existing orphaned sidecars are
+  reaped automatically by the new periodic reconciliation.
+
 ## 0.1.17 — 2026-11-07
 
 ### Fixed
