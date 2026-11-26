@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.2.0 — 2026-11-26
+
+### Added
+
+- Disable configured local, remote, and project-scoped MCP servers in the very
+  first config transform, before the Varlock sidecar/relay is ready, so OpenCode
+  cannot connect to a remote at its native URL before the relay exists.
+
+### Changed
+
+- `registry.retry` now refuses with `not_ready` when no broker lease is held.
+- `doctor` called during shutdown now returns the stopped status.
+
+### Fixed
+
+- Prevent a refresh, doctor, or heartbeat arriving during a scope's initial lease
+  acquisition from taking a second lease and leaking a broker process.
+- Prevent a retry racing shutdown from starting an ownerless broker.
+- Ensure waiters on a startup or refresh interrupted by disposal do not hang
+  forever.
+- Prevent `stopAll` racing relay reconciliation from leaking a relay.
+- Prevent doctor from reconciling concurrently with the observer, which could
+  start duplicate relays.
+- Make registry lock acquisition FIFO-fair and keep acquisition waits
+  interruptible.
+
 ## 0.1.18 — 2026-11-25
 
 ### Fixed
