@@ -29,6 +29,7 @@ type Fixture = {
   attempts: number;
   failed: boolean;
   readonly spawns: number[];
+  readonly spawnCompleted: Promise<void>;
   readonly stops: number[];
   readonly runs: Array<{ readonly account: string; readonly operation: string }>;
   readonly certDirectories: string[];
@@ -42,11 +43,13 @@ function fakeProcess(
   gate?: Promise<void>,
   refreshGate?: Promise<void>,
 ): Fixture {
+  let signalSpawnCompleted!: () => void;
   const fixture: Fixture = {
     service: undefined as never,
     attempts: 0,
     failed: mode === "fail",
     spawns: [],
+    spawnCompleted: new Promise<void>((resolve) => (signalSpawnCompleted = resolve)),
     stops: [],
     runs: [],
     certDirectories: [],
@@ -98,7 +101,7 @@ function fakeProcess(
           stop,
         };
         return managed;
-      }),
+      }).pipe(Effect.tap(() => Effect.sync(signalSpawnCompleted))),
     run: (input: RunInput): Effect.Effect<RunResult, never> => {
       const account = input.cwd === project ? "shared-project" : input.cwd;
       const operation = input.args.includes("status")
@@ -373,13 +376,18 @@ test("failed global startup attempts once and disables only protected local MCP"
   );
   const contexts = locations.map((location) => protectedPluginContext(location, canonicalProject));
   const refreshHandlers: Array<(input: {}, context: { error: Function }) => unknown> = [];
+  const statusHandlers: Array<(input: {}) => Effect.Effect<{ phase: string }>> = [];
   for (const { context } of contexts) {
     context.rpc.register = (
       _definition: unknown,
-      handlers: { refresh: (typeof refreshHandlers)[number] },
+      handlers: {
+        refresh: (typeof refreshHandlers)[number];
+        status: (typeof statusHandlers)[number];
+      },
     ) =>
       Effect.sync(() => {
         refreshHandlers.push(handlers.refresh);
+        statusHandlers.push(handlers.status);
         return { dispose: Effect.void, events: { emit: () => Effect.void } };
       });
   }
@@ -390,11 +398,16 @@ test("failed global startup attempts once and disables only protected local MCP"
       plugin,
       contexts.map(({ context }) => context),
     );
-    await waitFor(
-      () =>
-        fixture.attempts === 1 &&
-        contexts.every(({ values }) => values.get("selected")?.disabled === true),
-    );
+    // Protected servers are disabled from the first transform, so a disabled
+    // server no longer shows that a scope has seen the failed startup. Wait
+    // for every scope to report it before retrying.
+    await waitForAsync(async () => {
+      if (fixture.attempts !== 1 || statusHandlers.length !== contexts.length) return false;
+      const statuses = await Promise.all(
+        statusHandlers.map((status) => Effect.runPromise(status({}))),
+      );
+      return statuses.every((status) => status.phase === "failed");
+    });
     for (const { values } of contexts) {
       assert.equal(values.get("selected")?.disabled, true);
       assert.deepEqual(values.get("selected")?.environment, { KEEP: "ambient" });
@@ -412,11 +425,82 @@ test("failed global startup attempts once and disables only protected local MCP"
         { concurrency: "unbounded" },
       ),
     );
+    await waitFor(() => fixture.attempts === 2);
+    await fixture.spawnCompleted;
     assert.equal(fixture.attempts, 2);
   } finally {
-    for (const fiber of fibers) await Effect.runPromise(Fiber.interrupt(fiber));
-    assert.equal(fixture.stops.length, 1);
-    await rm(root, { recursive: true, force: true });
+    try {
+      for (const fiber of fibers) await Effect.runPromise(Fiber.interrupt(fiber));
+      await waitFor(() => fixture.stops.length === 1);
+      assert.equal(fixture.stops.length, 1);
+      assert.deepEqual(fixture.stops, fixture.spawns);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test("a refresh racing startup and shutdown never leaves a broker process running", async () => {
+  const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
+  // Refresh at several points of the startup, some before the scopes hold
+  // their broker lease, then shut down at several points after it.
+  for (const refreshDelay of [4, 40, 150, 300]) {
+    for (const interruptDelay of [0, 30]) {
+      const root = await mkdtemp(join(tmpdir(), "key-ferry-global-broker-race-"));
+      const project = join(root, "project");
+      mkdirSync(project, { recursive: true });
+      const canonicalProject = await realpath(project);
+      const fixture = fakeProcess(canonicalProject, "fail");
+      const plugin = makePlugin({ layer: () => managerLayer(fixture, canonicalProject) });
+      const locations = await Promise.all(
+        Array.from({ length: 11 }, (_, index) => mkdtemp(join(root, `host-${index}-`))),
+      );
+      const contexts = locations.map((location) =>
+        protectedPluginContext(location, canonicalProject),
+      );
+      const refreshHandlers: Array<(input: {}, context: { error: Function }) => unknown> = [];
+      for (const { context } of contexts) {
+        context.rpc.register = (
+          _definition: unknown,
+          handlers: { refresh: (typeof refreshHandlers)[number] },
+        ) =>
+          Effect.sync(() => {
+            refreshHandlers.push(handlers.refresh);
+            return { dispose: Effect.void, events: { emit: () => Effect.void } };
+          });
+      }
+      let fibers: ReturnType<typeof Effect.runFork>[] = [];
+      try {
+        fibers = await runPluginContexts(
+          plugin,
+          contexts.map(({ context }) => context),
+        );
+        for (let index = 0; index < refreshDelay; index++) await tick();
+        fixture.failed = false;
+        const refreshes = refreshHandlers.map((refresh) =>
+          Effect.runPromise(
+            refresh({}, { error: (code, data) => ({ code, data }) }) as Effect.Effect<unknown>,
+          ).catch(() => undefined),
+        );
+        for (let index = 0; index < interruptDelay; index++) await tick();
+        for (const fiber of fibers) await Effect.runPromise(Fiber.interrupt(fiber));
+        // Every refresh settles, and every process that was spawned is stopped.
+        await Promise.all(refreshes);
+        await waitFor(() => fixture.stops.length === fixture.spawns.length);
+        for (let index = 0; index < 30; index++) await tick();
+        assert.deepEqual(
+          fixture.stops,
+          fixture.spawns,
+          `refresh ${refreshDelay}/${interruptDelay}`,
+        );
+      } finally {
+        try {
+          for (const fiber of fibers) await Effect.runPromise(Fiber.interrupt(fiber));
+        } finally {
+          await rm(root, { recursive: true, force: true });
+        }
+      }
+    }
   }
 });
 

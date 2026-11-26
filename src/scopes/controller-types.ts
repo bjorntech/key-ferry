@@ -1,4 +1,5 @@
-import type { Scope } from "effect";
+import { Fiber } from "effect";
+import type { Scope, Semaphore } from "effect";
 import type { BrokerLease } from "../broker-registry.js";
 import type { ScopeId, SafeStatus } from "../contracts.js";
 import type { ServerProtection } from "../options.js";
@@ -10,6 +11,8 @@ export type Runtime = {
   readonly id: ScopeId;
   readonly group: ScopedGroup;
   lease?: BrokerLease;
+  /** Serializes lease acquisition so a runtime never holds two broker leases. */
+  readonly leaseLock: Semaphore.Semaphore;
   readonly remote: RemoteRelayCoordinator;
   mappings: Readonly<Record<string, ServerProtection>>;
   state: ProtectionState;
@@ -19,4 +22,5 @@ export type Runtime = {
   readonly scope: Scope.Closeable;
   epoch: number;
   transitioning: boolean;
+  observer?: Fiber.Fiber<void, never>;
 };

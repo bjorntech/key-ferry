@@ -68,6 +68,14 @@ function factoryFor(
 
 const identity = { canonicalize: (value: string) => Effect.succeed(value) };
 
+async function waitForFlag(getFlag: () => boolean, label: string) {
+  const deadline = Date.now() + 2_000;
+  while (!getFlag()) {
+    if (Date.now() >= deadline) throw new Error(`Timed out waiting for ${label}`);
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+}
+
 test("acquire is non-blocking and status is safe while layer authentication is pending", async () => {
   const gate = await Effect.runPromise(Deferred.make<void>());
   const registry = makeBrokerRegistry(identity);
@@ -155,10 +163,18 @@ test("startup failure is a zero-refcount tombstone and retry is one shared attem
   assert.ok(errors.every((error) => error instanceof VarlockError));
   await Effect.runPromise(Effect.all(leases.map((lease) => lease.release)));
 
+  // With no lease held there is no owner that could ever stop a replacement,
+  // so the tombstone refuses to retry and starts nothing.
+  await assert.rejects(
+    Effect.runPromise(registry.retry(factory, options())),
+    (error) => error instanceof VarlockError && error.code === "not_ready",
+  );
+  assert.equal(attempts, 1);
+  assert.equal(built.count, 1);
+
   const tombstone = await Effect.runPromise(registry.acquire(factory, options()));
   await assert.rejects(Effect.runPromise(tombstone.ensureReady), VarlockError);
   assert.equal(attempts, 1);
-  await Effect.runPromise(tombstone.release);
 
   const retryErrors = await Promise.all(
     Array.from({ length: 11 }, async () => {
@@ -175,9 +191,67 @@ test("startup failure is a zero-refcount tombstone and retry is one shared attem
   assert.ok(
     retryErrors.every((error) => error instanceof VarlockError && error.code === "refresh_failed"),
   );
+  await Effect.runPromise(tombstone.release);
   const postRetry = await Effect.runPromise(registry.acquire(factory, options()));
   await assert.rejects(Effect.runPromise(postRetry.ensureReady), VarlockError);
   await Effect.runPromise(postRetry.release);
+});
+
+test("releasing the last lease during startup settles callers awaiting readiness", async () => {
+  const registry = makeBrokerRegistry(identity);
+  let building = false;
+  const factory: ProjectKeyFerryManagerFactory = {
+    layer: () =>
+      Layer.effect(
+        ProjectKeyFerryManager,
+        Effect.sync(() => {
+          building = true;
+        }).pipe(Effect.andThen(Effect.never)),
+      ),
+  };
+  const lease = await Effect.runPromise(registry.acquire(factory, options()));
+  const waiting = Effect.runPromise(lease.ensureReady.pipe(Effect.timeout("2 seconds")));
+  await waitForFlag(() => building, "startup to begin");
+  await Effect.runPromise(lease.release);
+  // Disposal interrupts the startup; the waiter is told instead of hanging.
+  await assert.rejects(
+    waiting,
+    (error) => error instanceof VarlockError && error.code === "disposed",
+  );
+});
+
+test("a startup defect settles callers awaiting readiness", async () => {
+  const registry = makeBrokerRegistry(identity);
+  const factory: ProjectKeyFerryManagerFactory = {
+    layer: () => Layer.effect(ProjectKeyFerryManager, Effect.die(new Error("fixture defect"))),
+  };
+  const lease = await Effect.runPromise(registry.acquire(factory, options()));
+  await assert.rejects(
+    Effect.runPromise(lease.ensureReady.pipe(Effect.timeout("2 seconds"))),
+    (error) => error instanceof VarlockError && error.code === "start_failed",
+  );
+  await Effect.runPromise(lease.release);
+});
+
+test("disposing an entry during a refresh settles callers awaiting the refresh", async () => {
+  const registry = makeBrokerRegistry(identity);
+  let refreshing = false;
+  const factory = factoryFor(() =>
+    manager({
+      refreshReady: Effect.sync(() => {
+        refreshing = true;
+      }).pipe(Effect.andThen(Effect.never)),
+    }),
+  );
+  const lease = await Effect.runPromise(registry.acquire(factory, options()));
+  await Effect.runPromise(lease.ensureReady);
+  const waiting = Effect.runPromise(lease.refreshReady.pipe(Effect.timeout("2 seconds")));
+  await waitForFlag(() => refreshing, "refresh to begin");
+  await Effect.runPromise(lease.release);
+  await assert.rejects(
+    waiting,
+    (error) => error instanceof VarlockError && error.code === "disposed",
+  );
 });
 
 test("subscription replays READY and never exposes environment canaries", async () => {
@@ -318,6 +392,63 @@ test("interrupting one waiter does not cancel shared startup and release is idem
   assert.equal(disposals, 1);
 });
 
+test("queued release is not starved by new acquires", async () => {
+  const lockHeld = await Effect.runPromise(Deferred.make<void>());
+  let enteredCanonicalize = false;
+  let disposed = false;
+  const registry = makeBrokerRegistry({
+    canonicalize: (value) =>
+      value === "blocked"
+        ? Effect.sync(() => {
+            enteredCanonicalize = true;
+          }).pipe(Effect.andThen(Deferred.await(lockHeld)), Effect.as(value))
+        : Effect.succeed(value),
+  });
+  const factory = factoryFor(() =>
+    manager({
+      dispose: Effect.sync(() => {
+        disposed = true;
+      }),
+    }),
+  );
+  const first = await Effect.runPromise(registry.acquire(factory, options({ owner: "first" })));
+  await Effect.runPromise(first.ensureReady);
+
+  // Keep the registry gate occupied while the final release queues behind it.
+  // The runtime scheduler decides whether a newly runnable fiber gets a turn
+  // before the semaphore's wake task, so the old barging implementation is not
+  // guaranteed to lose deterministically. This still checks the observable
+  // contract: queued same-key acquires cannot prevent final disposal.
+  const blocker = Effect.runFork(
+    registry
+      .acquire(factory, options({ projectDirectory: "blocked" as any }))
+      .pipe(Effect.flatMap((lease) => lease.release)),
+  );
+  await waitForFlag(() => enteredCanonicalize, "blocked acquire to hold the registry gate");
+  const release = Effect.runPromise(first.release);
+  let acquiredBeforeRelease = 0;
+  const acquirers = Array.from({ length: 32 }, () =>
+    Effect.runFork(
+      registry.acquire(factory, options({ owner: "first" })).pipe(
+        Effect.tap(() => Effect.sync(() => acquiredBeforeRelease++)),
+        Effect.flatMap((lease) => lease.release),
+      ),
+    ),
+  );
+  await Effect.runPromise(Deferred.succeed(lockHeld, undefined));
+
+  await Promise.race([
+    release,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("queued release was starved by new acquires")), 500),
+    ),
+  ]);
+  assert.equal(acquiredBeforeRelease, 0);
+  assert.equal(disposed, true);
+  for (const fiber of acquirers) await Effect.runPromise(Fiber.interrupt(fiber));
+  await Effect.runPromise(Fiber.interrupt(blocker));
+});
+
 test("last-release cleanup is outside the registry gate and same-key reacquire waits for a fresh entry", async () => {
   const disposeGate = await Effect.runPromise(Deferred.make<void>());
   let disposeStarted = false;
@@ -335,7 +466,7 @@ test("last-release cleanup is outside the registry gate and same-key reacquire w
   const first = await Effect.runPromise(registry.acquire(factory, options({ owner: "A" })));
   await Effect.runPromise(first.ensureReady);
   const closing = Effect.runPromise(first.release);
-  while (!disposeStarted) await new Promise((resolve) => setImmediate(resolve));
+  await waitForFlag(() => disposeStarted, "disposal to begin");
 
   const other = await Effect.runPromise(registry.acquire(factory, options({ owner: "B" })));
   await Effect.runPromise(other.ensureReady);
@@ -393,7 +524,7 @@ test("retry reports unavailable entries and waits for an entry that is closing",
   await assert.rejects(Effect.runPromise(registry.retry(factory, options())), VarlockError);
 
   const closing = Effect.runPromise(lease.release);
-  while (!disposeStarted) await new Promise((resolve) => setImmediate(resolve));
+  await waitForFlag(() => disposeStarted, "disposal to begin");
   const retrying = Effect.runPromise(registry.retry(factory, options()));
   await assert.rejects(
     Effect.runPromise(registry.retry(factory, options()).pipe(Effect.timeout("5 millis"))),

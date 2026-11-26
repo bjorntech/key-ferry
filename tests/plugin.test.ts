@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Mcp } from "@opencode/plugin/effect";
-import { Deferred, Effect } from "effect";
+import { Deferred, Effect, Fiber } from "effect";
 import { Layer } from "effect";
 import { makeBrokerRegistry } from "../src/broker-registry.js";
 import {
@@ -227,6 +229,123 @@ describe("local MCP protection", () => {
 });
 
 describe("plugin registration gating", () => {
+  test("keeps configured local, remote, and project servers disabled before sidecar readiness", async () => {
+    const root = mkdtempSync(join(tmpdir(), "key-ferry-project-"));
+    mkdirSync(join(root, ".opencode"), { recursive: true });
+    writeFileSync(
+      join(root, ".opencode/key-ferry.jsonc"),
+      JSON.stringify({ enabled: true, servers: { project: { env: ["PROJECT_KEY"] } } }),
+    );
+    const ready = await Effect.runPromise(Deferred.make<void>());
+    const servers: Record<string, Mcp.ServerConfig> = {
+      local: { type: "local", command: ["local-server"] },
+      remote: {
+        type: "remote",
+        url: "https://mcp.example.test/mcp",
+        oauth: false,
+      },
+      project: { type: "local", command: ["project-server"] },
+      unmapped: { type: "local", command: ["unmapped-server"] },
+    };
+    const { editor, values } = editorFor(servers);
+    const pristine = structuredClone(servers);
+    const status = {
+      phase: "ready" as const,
+      projectDirectory: root,
+      generation: 1,
+    };
+    const manager = {
+      status: Effect.succeed(status),
+      ensureStarted: Deferred.await(ready).pipe(Effect.as(status)),
+      ensureReady: Deferred.await(ready).pipe(
+        Effect.as({
+          status,
+          environment: { API_KEY: "placeholder" },
+        }),
+      ),
+      environment: Effect.succeed({ API_KEY: "placeholder" }),
+      refresh: Effect.succeed(status),
+      refreshReady: Effect.succeed({
+        status,
+        environment: { API_KEY: "placeholder" },
+      }),
+      dispose: Effect.void,
+      withExclusive: (effect: Effect.Effect<unknown>) => effect,
+    };
+    const factory: ProjectKeyFerryManagerFactory = {
+      layer: () => Layer.succeed(ProjectKeyFerryManager, manager as never),
+    };
+    const relayFactory = () =>
+      Effect.succeed({
+        localUrl: "http://127.0.0.1:4321",
+        downstreamToken: "relay-token",
+        health: Effect.succeed({
+          listening: true,
+          activeRequests: 0,
+          localUrl: "http://127.0.0.1:4321",
+        }),
+        stop: Effect.void,
+      });
+    let transform: ((next: typeof editor) => void) | undefined;
+    const context = {
+      options: {
+        command: ["varlock"],
+        servers: {
+          local: { env: ["LOCAL_KEY"] },
+          remote: { remote: { headers: { Authorization: "API_KEY" } } },
+        },
+        projectConfig: { enabled: true, file: ".opencode/key-ferry.jsonc" },
+      },
+      location: { project: { directory: root } },
+      mcp: {
+        transform: (callback: typeof transform) =>
+          Effect.sync(() => {
+            transform = callback;
+            callback?.(editor);
+          }),
+        reload: () =>
+          Effect.sync(() => {
+            for (const [name, config] of Object.entries(pristine))
+              values.set(name, structuredClone(config));
+            transform?.(editor);
+          }),
+      },
+      rpc: {
+        register: () =>
+          Effect.succeed({ dispose: Effect.void, events: { emit: () => Effect.void } }),
+      },
+    } as never;
+    const plugin = makePlugin(
+      factory,
+      relayFactory as never,
+      makeBrokerRegistry({ canonicalize: (directory) => Effect.succeed(directory) }),
+    );
+    const fiber = Effect.runFork(
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* plugin.effect(context);
+          yield* Effect.never;
+        }),
+      ),
+    );
+    try {
+      // The first transform runs after the scoped configuration is read from
+      // disk; wait for it by time, not by a fixed number of ticks.
+      const deadline = Date.now() + 5_000;
+      while (values.get("remote")?.disabled === undefined && Date.now() < deadline)
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(values.get("local")?.disabled).toBe(true);
+      expect(values.get("remote")?.disabled).toBe(true);
+      expect(values.get("remote")?.headers).toBeUndefined();
+      expect(values.get("project")?.disabled).toBe(true);
+      expect(values.get("unmapped")?.disabled).toBeUndefined();
+    } finally {
+      await Effect.runPromise(Deferred.succeed(ready, undefined));
+      await Effect.runPromise(Fiber.interrupt(fiber));
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("explicitly disabled registration does not read location or create the manager layer", async () => {
     let layerCalls = 0;
     const factory: ProjectKeyFerryManagerFactory = {
