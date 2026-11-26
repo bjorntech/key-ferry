@@ -130,6 +130,21 @@ function applyLocalProtection(
   });
 }
 
+function applyInitialProtection(
+  editor: McpEditor,
+  configuration: Awaited<ReturnType<typeof loadScopedConfiguration>>,
+): void {
+  const mappings = {
+    ...configuration.global.servers,
+    ...(configuration.project?.servers ?? {}),
+  };
+  applyProtection(
+    editor,
+    { ...configuration.global.options.adapter, servers: mappings },
+    { ready: false, environment: {} },
+  );
+}
+
 /**
  * Apply only explicitly configured local protections. A selected remote
  * server, missing key, or unavailable manager is disabled rather than falling
@@ -281,7 +296,13 @@ export function makePlugin(
               reload: ctx.mcp.reload,
               startEmptyGlobal: !parsed.projectConfig.enabled,
             });
+            // The transform callback runs before the asynchronous sidecar
+            // startup. Protect configured servers in this first draft too:
+            // OpenCode may connect as soon as the transform returns, so
+            // leaving a selected remote at its native URL would create an
+            // unauthenticated request before the relay is ready.
             controller.apply(next);
+            applyInitialProtection(next, configuration);
             Deferred.doneUnsafe(controllerReady, Effect.succeed(undefined));
           }
         });
