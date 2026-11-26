@@ -1,4 +1,4 @@
-import { Cause, Clock, Effect, Exit, Scope, Stream } from "effect";
+import { Cause, Clock, Effect, Exit, Fiber, Scope, Semaphore, Stream } from "effect";
 import { retryDelayMs, type BrokerLease, type BrokerRegistry } from "./broker-registry.js";
 import type {
   ProjectKeyFerryManagerFactory,
@@ -265,10 +265,10 @@ export function makeScopedController(options: ScopedControllerOptions) {
 
   const startObserver = (runtime: Runtime) =>
     runtime.lease
-      ? Effect.suspend(() => {
+      ? Effect.gen(function* () {
           const epoch = runtime.epoch;
           const lease = runtime.lease!;
-          return lease.ensureReady.pipe(
+          const observer = yield* lease.ensureReady.pipe(
             Effect.flatMap(({ status, environment }) =>
               runtime.active ? reconcile(runtime, status, environment, epoch) : Effect.void,
             ),
@@ -281,6 +281,7 @@ export function makeScopedController(options: ScopedControllerOptions) {
             ),
             Effect.forkIn(runtime.scope),
           );
+          runtime.observer = observer;
         })
       : Effect.void;
 
@@ -323,11 +324,10 @@ export function makeScopedController(options: ScopedControllerOptions) {
     const lease = runtime.lease;
     if (!runtime.active) return Effect.void;
     if (!lease)
-      return options.registry.acquire(options.factory, runtime.group.manager).pipe(
-        Effect.flatMap((next) => {
-          runtime.lease = next as BrokerLease;
+      return acquireLease(runtime).pipe(
+        Effect.flatMap((held) => {
           const epoch = runtime.epoch;
-          return runtime.lease.ensureReady.pipe(
+          return held.lease.ensureReady.pipe(
             Effect.flatMap(({ status, environment }) =>
               reconcile(runtime, status, environment, epoch),
             ),
@@ -375,6 +375,49 @@ export function makeScopedController(options: ScopedControllerOptions) {
         : clear(runtime, "starting")
       : heartbeatReady(runtime, lease, current);
 
+  /**
+   * Take the runtime's single broker lease. The initial start, an RPC
+   * operation and the heartbeat can all find the runtime without a lease at
+   * the same time; they share one acquisition here instead of each taking a
+   * lease and overwriting the others, which would leave a lease that is never
+   * released and a broker process that is never stopped. `acquired` tells the
+   * caller that it took a fresh lease and therefore starts its observer.
+   *
+   * Acquisition and adoption are uninterruptible as a unit: a lease the
+   * registry has handed out is always either stored on the runtime, where
+   * disposal releases it, or released here.
+   */
+  const acquireLease = (runtime: Runtime) =>
+    runtime.leaseLock.withPermit(
+      Effect.suspend(() =>
+        runtime.lease
+          ? Effect.succeed({ lease: runtime.lease, acquired: false })
+          : Effect.uninterruptible(
+              options.registry
+                .acquire(options.factory, runtime.group.manager)
+                .pipe(Effect.flatMap((lease) => adoptLease(runtime, lease as BrokerLease))),
+            ),
+      ),
+    );
+
+  const adoptLease = (runtime: Runtime, lease: BrokerLease) =>
+    runtime.active
+      ? Effect.sync(() => {
+          runtime.lease = lease;
+          return { lease, acquired: true };
+        })
+      : lease.release.pipe(
+          Effect.andThen(
+            Effect.fail(
+              new VarlockError({
+                code: "disposed",
+                message: "Key Ferry scope is no longer active",
+                retryable: false,
+              }),
+            ),
+          ),
+        );
+
   const acquire = (group: ScopedGroup) =>
     Effect.gen(function* () {
       const scope = yield* Scope.make();
@@ -382,6 +425,7 @@ export function makeScopedController(options: ScopedControllerOptions) {
         id: group.id,
         group,
         lease: undefined,
+        leaseLock: yield* Semaphore.make(1),
         remote: makeRemoteRelayCoordinator(
           options.relayFactory,
           group.options.adapter.allowPrivateNetwork,
@@ -395,17 +439,15 @@ export function makeScopedController(options: ScopedControllerOptions) {
         transitioning: false,
       };
       runtimes.set(group.id, runtime);
-      const lease = yield* options.registry.acquire(options.factory, group.manager).pipe(
-        Effect.map((value) => value as BrokerLease),
+      const held = yield* acquireLease(runtime).pipe(
         Effect.catch((error: unknown) =>
           Effect.sync(() => {
             rememberFailure(runtime, error, "unavailable");
           }).pipe(Effect.as(undefined)),
         ),
       );
-      if (lease) {
-        runtime.lease = lease;
-        yield* startObserver(runtime);
+      if (held) {
+        if (held.acquired) yield* startObserver(runtime);
         yield* subscribeRuntime(runtime).pipe(Effect.forkIn(runtime.scope));
       }
       yield* Effect.forever(heartbeat(runtime)).pipe(
@@ -450,11 +492,13 @@ export function makeScopedController(options: ScopedControllerOptions) {
     });
 
   const acquireForOperation = (runtime: Runtime, kind: "refresh" | "doctor") =>
-    options.registry.acquire(options.factory, runtime.group.manager).pipe(
-      Effect.map((value) => value as BrokerLease),
+    acquireLease(runtime).pipe(
       Effect.catch((error: unknown) =>
         kind === "doctor"
           ? Effect.gen(function* () {
+              // A scope retired while its lease was being acquired stays
+              // stopped; it has no failure to report.
+              if (!runtime.active) return;
               rememberFailure(runtime, error, "unavailable");
               yield* options.reload();
             }).pipe(Effect.as(undefined))
@@ -464,14 +508,9 @@ export function makeScopedController(options: ScopedControllerOptions) {
 
   const operationStarting = (runtime: Runtime, kind: "refresh" | "doctor", lease: BrokerLease) =>
     kind === "doctor"
-      ? lease.ensureReady.pipe(
-          Effect.catch((error: unknown) =>
-            Effect.gen(function* () {
-              rememberFailure(runtime, error);
-              yield* options.reload();
-            }),
-          ),
-        )
+      ? runtime.observer
+        ? Fiber.join(runtime.observer)
+        : lease.ensureReady
       : lease.ensureReady;
 
   const operationFailed = (runtime: Runtime, kind: "refresh" | "doctor") =>
@@ -535,12 +574,21 @@ export function makeScopedController(options: ScopedControllerOptions) {
 
   const prepareOperation = (runtime: Runtime, kind: "refresh" | "doctor") =>
     runtime.lease
-      ? Effect.succeed({ lease: runtime.lease, acquired: false })
+      ? Effect.succeed({ lease: runtime.lease })
       : acquireForOperation(runtime, kind).pipe(
-          Effect.flatMap((lease) => {
-            if (!lease) return Effect.succeed(undefined);
-            runtime.lease = lease;
-            return startObserver(runtime).pipe(Effect.as({ lease, acquired: true }));
+          Effect.flatMap((held) => {
+            if (!held) return Effect.succeed(undefined);
+            const lease = held.lease;
+            // Another caller took the lease while this operation waited; it
+            // also owns the observer, so operate on the shared lease.
+            if (!held.acquired) return Effect.succeed({ lease });
+            return startObserver(runtime).pipe(
+              Effect.flatMap(() =>
+                kind === "doctor" && runtime.observer
+                  ? Fiber.join(runtime.observer).pipe(Effect.as(undefined))
+                  : Effect.succeed({ lease }),
+              ),
+            );
           }),
         );
 
@@ -566,7 +614,7 @@ export function makeScopedController(options: ScopedControllerOptions) {
       runtime.transitioning = true;
       return yield* Effect.gen(function* () {
         const prepared = yield* prepareOperation(runtime, kind);
-        if (!prepared || (kind === "doctor" && prepared.acquired)) return yield* status;
+        if (!prepared) return yield* status;
         yield* operateCurrent(runtime, kind, prepared.lease).pipe(
           Effect.tapError((error) =>
             Effect.sync(() => rememberFailure(runtime, error, "refresh_failed")),

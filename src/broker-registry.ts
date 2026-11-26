@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import { join } from "node:path";
 import {
+  Cause,
   Context,
   Deferred,
   Duration,
@@ -101,6 +102,22 @@ type Entry = {
 
 function retryPending(entry: Entry): { pending: NonNullable<Entry["attempt"]> } | undefined {
   return entry.attempt && entry.attemptPending ? { pending: entry.attempt } : undefined;
+}
+
+function notReady(message: string): VarlockError {
+  return new VarlockError({ code: "not_ready", message, retryable: false });
+}
+
+/**
+ * Why a settled entry cannot be retried, if it cannot. A failed entry outlives
+ * its last lease so its backoff is remembered, but starting a replacement for
+ * it would spawn a process that no lease release can ever stop, so a retry
+ * requires a current owner.
+ */
+function retryRefusal(entry: Entry): VarlockError | undefined {
+  if (!entry.failure) return notReady("No failed broker entry");
+  if (entry.leases.size === 0) return notReady("No broker lease is held");
+  return undefined;
 }
 
 const adapterKeys = new Set([
@@ -404,10 +421,21 @@ export function makeBrokerRegistry(configuration: BrokerRegistryOptions = {}) {
           Effect.andThen(Deferred.succeed(target, result)),
         ),
       ),
-      Effect.catch((error: unknown) =>
+      // Settle the attempt on every exit. Disposal interrupts the startup
+      // fiber; without this, callers awaiting the attempt would wait forever.
+      Effect.catchCause((cause) =>
         Effect.sync(() => {
           entry.attemptPending = false;
-        }).pipe(Effect.andThen(Deferred.fail(target, safeError(error, "start_failed")))),
+        }).pipe(
+          Effect.andThen(
+            Deferred.fail(
+              target,
+              Cause.hasInterruptsOnly(cause)
+                ? safeError(undefined, "disposed")
+                : safeError(Cause.squash(cause), "start_failed"),
+            ),
+          ),
+        ),
       ),
       Effect.tap(() =>
         Effect.sync(() => {
@@ -451,6 +479,13 @@ export function makeBrokerRegistry(configuration: BrokerRegistryOptions = {}) {
                 ...metadata,
               }).pipe(Effect.flatMap(() => Deferred.fail(next, failure)));
             }),
+            // Closing the entry scope interrupts this fiber. Settle the
+            // refresh so its callers do not wait forever on a disposed entry.
+            Effect.onInterrupt(() =>
+              Effect.sync(() => {
+                entry.refresh = undefined;
+              }).pipe(Effect.andThen(Deferred.fail(next, safeError(undefined, "disposed")))),
+            ),
             Effect.forkIn(entry.scope),
           );
           return next;
@@ -463,9 +498,9 @@ export function makeBrokerRegistry(configuration: BrokerRegistryOptions = {}) {
     factory: ProjectKeyFerryManagerFactory<R>,
     options: ProjectKeyFerryManagerOptions,
     directory: string,
+    identity: { readonly key: string; readonly contextKey: string },
   ): Effect.Effect<Entry> =>
     Effect.gen(function* () {
-      const identity = yield* keyFor(directory, options, schemaHash).pipe(Effect.orDie);
       const key = identity.key;
       const factoryMap = factories.get(factory as object) ?? new Map<string, Entry>();
       factories.set(factory as object, factoryMap);
@@ -623,11 +658,21 @@ export function makeBrokerRegistry(configuration: BrokerRegistryOptions = {}) {
       log(entry, "reused");
     });
 
+  /**
+   * Hold the registry lock while keeping only the wait interruptible.
+   * `withPermit` queues fairly with the other registry operations; its
+   * interruptibility mask restores interruption around that wait, while the
+   * body remains uninterruptible so a lease cannot be added and then lost
+   * before it reaches the caller.
+   */
+  const withLockAfterInterruptibleWait = <A, E>(body: Effect.Effect<A, E>) =>
+    Effect.interruptible(lock.withPermit(Effect.uninterruptible(body)));
+
   const acquireAttempt = <R>(
     factory: ProjectKeyFerryManagerFactory<R>,
     options: ProjectKeyFerryManagerOptions,
   ) =>
-    lock.withPermit(
+    withLockAfterInterruptibleWait(
       Effect.gen(function* () {
         const directory = yield* canonicalize(options.projectDirectory).pipe(
           Effect.mapError(() => new TypeError("project directory does not exist")),
@@ -635,7 +680,10 @@ export function makeBrokerRegistry(configuration: BrokerRegistryOptions = {}) {
         const factoryMap = factories.get(factory as object) ?? new Map<string, Entry>();
         factories.set(factory as object, factoryMap);
         factoryMaps.add(factoryMap);
-        const entry = yield* getOrCreateEntry(factory, options, directory);
+        const identity = yield* keyFor(directory, options, schemaHash).pipe(Effect.orDie);
+        // Let an interrupted caller give up before any lease is handed out.
+        yield* Effect.interruptible(Effect.void);
+        const entry = yield* getOrCreateEntry(factory, options, directory, identity);
         if (entry.closing) return { waiting: entry.closing };
         yield* reuseIdle(entry);
         const leaseID = Symbol();
@@ -706,18 +754,30 @@ export function makeBrokerRegistry(configuration: BrokerRegistryOptions = {}) {
       }),
     );
 
+  /**
+   * Acquire a lease on the shared broker for these options.
+   *
+   * Once a lease has been added to the entry it must reach the caller, or the
+   * entry can never drop to zero leases and its process is never stopped. The
+   * acquisition is therefore uninterruptible, except at the points where no
+   * lease has been handed out yet: before the entry is leased and while waiting
+   * for a closing entry. Callers must store the lease before they become
+   * interruptible again.
+   */
   const acquire = <R>(
     factory: ProjectKeyFerryManagerFactory<R>,
     options: ProjectKeyFerryManagerOptions,
   ): Effect.Effect<BrokerLease, any, never> =>
-    Effect.gen(function* () {
-      const result = yield* acquireAttempt(factory, options);
-      if ("waiting" in result) {
-        yield* Deferred.await(result.waiting);
-        return yield* acquire(factory, options);
-      }
-      return result;
-    });
+    Effect.uninterruptible(
+      Effect.gen(function* () {
+        const result = yield* acquireAttempt(factory, options);
+        if ("waiting" in result) {
+          yield* Effect.interruptible(Deferred.await(result.waiting));
+          return yield* acquire(factory, options);
+        }
+        return result;
+      }),
+    );
 
   const retryAttempt = (
     factory: ProjectKeyFerryManagerFactory<any>,
@@ -731,32 +791,37 @@ export function makeBrokerRegistry(configuration: BrokerRegistryOptions = {}) {
   > =>
     Effect.gen(function* () {
       const directory = yield* canonicalize(options.projectDirectory);
+      // Starting the replacement and publishing its batch is one
+      // uninterruptible step: an interrupted caller must not leave a batch
+      // that later retries would await forever.
       const target = yield* lock.withPermit(
-        Effect.gen(function* () {
-          const entry = factories
-            .get(factory as object)
-            ?.get((yield* keyFor(directory, options, schemaHash)).key);
-          if (entry?.retryBatch) return entry.retryBatch;
-          if (entry) {
-            const initial = yield* retryEntry(entry);
-            if ("waiting" in initial || "pending" in initial) return initial;
-            const batch = yield* Deferred.make<BrokerResult, VarlockError>();
-            entry.retryBatch = batch;
-            yield* Deferred.await(initial).pipe(
-              Effect.matchEffect({
-                onSuccess: (result) => Deferred.succeed(batch, result),
-                onFailure: (error) => Deferred.fail(batch, error),
-              }),
-              // Keep the completed batch as the result of this explicit
-              // retry. A background retry clears it when its deadline is due
-              // and atomically establishes the next batch.
-              Effect.andThen(Effect.void),
-              Effect.forkDetach,
-            );
-            return batch;
-          }
-          return yield* retryEntry(entry);
-        }),
+        Effect.uninterruptible(
+          Effect.gen(function* () {
+            const entry = factories
+              .get(factory as object)
+              ?.get((yield* keyFor(directory, options, schemaHash)).key);
+            if (entry?.retryBatch) return entry.retryBatch;
+            if (entry) {
+              const initial = yield* retryEntry(entry);
+              if ("waiting" in initial || "pending" in initial) return initial;
+              const batch = yield* Deferred.make<BrokerResult, VarlockError>();
+              entry.retryBatch = batch;
+              yield* Deferred.await(initial).pipe(
+                Effect.matchEffect({
+                  onSuccess: (result) => Deferred.succeed(batch, result),
+                  onFailure: (error) => Deferred.fail(batch, error),
+                }),
+                // Keep the completed batch as the result of this explicit
+                // retry. A background retry clears it when its deadline is due
+                // and atomically establishes the next batch.
+                Effect.andThen(Effect.void),
+                Effect.forkDetach,
+              );
+              return batch;
+            }
+            return yield* retryEntry(entry);
+          }),
+        ),
       );
       if ("waiting" in target || "pending" in target) return target;
       return yield* Deferred.await(target);
@@ -789,41 +854,32 @@ export function makeBrokerRegistry(configuration: BrokerRegistryOptions = {}) {
     | { pending: Deferred.Deferred<BrokerResult, VarlockError> },
     any
   > => {
-    if (!entry)
-      return Effect.fail(
-        new VarlockError({
-          code: "not_ready",
-          message: "No failed broker entry",
-          retryable: false,
-        }),
-      );
+    if (!entry) return Effect.fail(notReady("No failed broker entry"));
     if (entry.closing) return Effect.succeed({ waiting: entry.closing });
     const pending = retryPending(entry);
     if (pending) return Effect.succeed(pending);
-    if (!entry.failure)
-      return Effect.fail(
-        new VarlockError({
-          code: "not_ready",
-          message: "No failed broker entry",
-          retryable: false,
-        }),
-      );
-    return Effect.gen(function* () {
-      // The previous attempt is complete (attemptPending was checked above),
-      // so closing its scope cannot race a startup. This runs manager and
-      // certificate-directory finalizers before allocating the replacement.
-      yield* Scope.close(entry.scope, Exit.void).pipe(Effect.ignore);
-      entry.failure = undefined;
-      entry.disposed = false;
-      entry.scope = yield* Scope.make();
-      entry.manager = undefined;
-      entry.ready = yield* Deferred.make<BrokerResult, VarlockError>();
-      entry.attempt = entry.ready;
-      entry.attemptPending = true;
-      entry.startup = yield* start(entry).pipe(Effect.forkDetach);
-      yield* completeStartup(entry, entry.ready);
-      return entry.ready;
-    });
+    const refusal = retryRefusal(entry);
+    if (refusal) return Effect.fail(refusal);
+    // Uninterruptible: a half-applied replacement would leave an attempt
+    // that nothing completes.
+    return Effect.uninterruptible(
+      Effect.gen(function* () {
+        // The previous attempt is complete (attemptPending was checked above),
+        // so closing its scope cannot race a startup. This runs manager and
+        // certificate-directory finalizers before allocating the replacement.
+        yield* Scope.close(entry.scope, Exit.void).pipe(Effect.ignore);
+        entry.failure = undefined;
+        entry.disposed = false;
+        entry.scope = yield* Scope.make();
+        entry.manager = undefined;
+        entry.ready = yield* Deferred.make<BrokerResult, VarlockError>();
+        entry.attempt = entry.ready;
+        entry.attemptPending = true;
+        entry.startup = yield* start(entry).pipe(Effect.forkDetach);
+        yield* completeStartup(entry, entry.ready);
+        return entry.ready;
+      }),
+    );
   };
 
   const retryIfDue = (

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { isIP } from "node:net";
-import { Effect, Scope } from "effect";
+import { Effect, Scope, Semaphore } from "effect";
 import type { RemoteServerProtectionInput, ServerProtection } from "./options.js";
 
 /** Must stay in sync with the standalone relay implementation. */
@@ -268,6 +268,7 @@ export function makeRemoteRelayCoordinator(
     { handle: RemoteRelayHandle; generation: number; binding: RemoteRelayBinding }
   >();
   let currentDiagnostics: readonly RemoteDiagnostic[] = [];
+  const reconcileLock = Effect.runSync(Semaphore.make(1));
   const stop = (handle: RemoteRelayHandle) => handle.stop.pipe(Effect.catch(() => Effect.void));
 
   const remove = (name: string, old: { handle: RemoteRelayHandle } | undefined) =>
@@ -400,16 +401,23 @@ export function makeRemoteRelayCoordinator(
     Effect.gen(function* () {
       if (!factory) return;
       yield* remove(name, old);
-      const started = yield* factory({
-        upstreamUrl: upstream.toString(),
-        proxyUrl: wiring.proxyUrl,
-        managerCaPem: wiring.caPem,
-        placeholderHeaders: placeholders,
-        oauth: false,
-        binding,
-      }).pipe(
-        Effect.map((handle) => ({ ok: true as const, handle })),
-        Effect.catch(() => Effect.succeed({ ok: false as const })),
+      // Once the factory has produced a handle, do not allow interruption
+      // between receiving it and publishing it. A factory which is itself
+      // interruptible may still be interrupted while it is starting.
+      const started = yield* Effect.uninterruptibleMask((restore) =>
+        restore(
+          factory({
+            upstreamUrl: upstream.toString(),
+            proxyUrl: wiring.proxyUrl,
+            managerCaPem: wiring.caPem,
+            placeholderHeaders: placeholders,
+            oauth: false,
+            binding,
+          }),
+        ).pipe(
+          Effect.map((handle) => ({ ok: true as const, handle })),
+          Effect.catch(() => Effect.succeed({ ok: false as const })),
+        ),
       );
       if (started.ok) active.set(name, { handle: started.handle, generation, binding });
       else
@@ -423,25 +431,27 @@ export function makeRemoteRelayCoordinator(
     generation: number,
     brokerSessionId?: string,
   ) =>
-    Effect.gen(function* () {
-      const nextDiagnostics: RemoteDiagnostic[] = [];
-      for (const [name, mapping] of Object.entries(mappings)) {
-        if (!isRemoteProtection(mapping)) continue;
-        const server = servers.get(name);
-        const old = active.get(name);
-        yield* reconcileOne(
-          name,
-          mapping,
-          server,
-          old,
-          environment,
-          generation,
-          brokerSessionId,
-          nextDiagnostics,
-        );
-      }
-      currentDiagnostics = nextDiagnostics;
-    });
+    reconcileLock.withPermit(
+      Effect.gen(function* () {
+        const nextDiagnostics: RemoteDiagnostic[] = [];
+        for (const [name, mapping] of Object.entries(mappings)) {
+          if (!isRemoteProtection(mapping)) continue;
+          const server = servers.get(name);
+          const old = active.get(name);
+          yield* reconcileOne(
+            name,
+            mapping,
+            server,
+            old,
+            environment,
+            generation,
+            brokerSessionId,
+            nextDiagnostics,
+          );
+        }
+        currentDiagnostics = nextDiagnostics;
+      }),
+    );
 
   return {
     get handles() {
@@ -464,10 +474,12 @@ export function makeRemoteRelayCoordinator(
         ).pipe(Effect.map((values) => values.every(Boolean))),
       );
     },
-    stopAll: Effect.suspend(() =>
-      Effect.forEach([...active.values()], (record) => stop(record.handle), {
-        concurrency: "unbounded",
-      }).pipe(Effect.tap(() => Effect.sync(() => active.clear()))),
+    stopAll: reconcileLock.withPermit(
+      Effect.suspend(() =>
+        Effect.forEach([...active.values()], (record) => stop(record.handle), {
+          concurrency: "unbounded",
+        }).pipe(Effect.tap(() => Effect.sync(() => active.clear()))),
+      ),
     ),
   };
 }

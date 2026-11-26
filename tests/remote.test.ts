@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Effect } from "effect";
+import { Deferred, Effect, Fiber } from "effect";
 import { parseOptions } from "../src/options.js";
 import {
   makeRemoteRelayCoordinator,
@@ -179,6 +179,111 @@ describe("remote adapter contract", () => {
     expect(started).toHaveLength(2);
     expect(stopped).toEqual(["token-1"]);
     expect(JSON.stringify(coordinator.diagnostics)).not.toContain("token-2");
+  });
+
+  test("serializes concurrent reconciles and stops the relay on cleanup", async () => {
+    const started: RemoteRelayConfig[] = [];
+    const stopped: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const factory = (config: RemoteRelayConfig) => {
+      started.push(config);
+      const token = `token-${started.length}`;
+      const handle: RemoteRelayHandle = {
+        localUrl: `http://127.0.0.1:${4100 + started.length}`,
+        downstreamToken: token,
+        health: Effect.succeed({ listening: true, activeRequests: 0, localUrl: "" }),
+        stop: Effect.sync(() => void stopped.push(token)),
+      };
+      return started.length === 1
+        ? Effect.promise(async () => {
+            await gate;
+            return handle;
+          })
+        : Effect.succeed(handle);
+    };
+    const coordinator = makeRemoteRelayCoordinator(factory);
+    const options = parseOptions(
+      { servers: { remote: { remote: { headers: { Authorization: "REMOTE_API_KEY" } } } } },
+      "/project",
+    );
+    const first = Effect.runFork(
+      coordinator.reconcile(
+        new Map([["remote", server()]]),
+        options.adapter.servers,
+        environment,
+        1,
+      ),
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    const second = Effect.runFork(
+      coordinator.reconcile(
+        new Map([["remote", server()]]),
+        options.adapter.servers,
+        environment,
+        1,
+      ),
+    );
+    release();
+    await Effect.runPromise(Fiber.join(first));
+    await Effect.runPromise(Fiber.join(second));
+
+    expect(started).toHaveLength(1);
+    expect(coordinator.handles.size).toBe(1);
+    await Effect.runPromise(coordinator.stopAll);
+    expect(stopped).toEqual(["token-1"]);
+  });
+
+  test("serializes stopAll with a relay that is still starting", async () => {
+    const started: RemoteRelayConfig[] = [];
+    const stopped: string[] = [];
+    const entered = Effect.runSync(Deferred.make<void>());
+    const release = Effect.runSync(Deferred.make<void>());
+    const factory = (config: RemoteRelayConfig) => {
+      started.push(config);
+      const token = `token-${started.length}`;
+      const handle: RemoteRelayHandle = {
+        localUrl: `http://127.0.0.1:${4200 + started.length}`,
+        downstreamToken: token,
+        health: Effect.succeed({ listening: true, activeRequests: 0, localUrl: "" }),
+        stop: Effect.sync(() => void stopped.push(token)),
+      };
+      return Effect.gen(function* () {
+        yield* Deferred.succeed(entered, undefined);
+        yield* Deferred.await(release);
+        return handle;
+      });
+    };
+    const coordinator = makeRemoteRelayCoordinator(factory);
+    const options = parseOptions(
+      { servers: { remote: { remote: { headers: { Authorization: "REMOTE_API_KEY" } } } } },
+      "/project",
+    );
+    const reconcileFiber = Effect.runFork(
+      coordinator.reconcile(
+        new Map([["remote", server()]]),
+        options.adapter.servers,
+        environment,
+        1,
+      ),
+    );
+    await Promise.race([
+      Effect.runPromise(Deferred.await(entered)),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("relay factory did not start")), 1000),
+      ),
+    ]);
+    const stopFiber = Effect.runFork(coordinator.stopAll);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(stopped).toEqual([]);
+
+    await Effect.runPromise(Deferred.succeed(release, undefined));
+    await Effect.runPromise(Fiber.join(reconcileFiber));
+    await Effect.runPromise(Fiber.join(stopFiber));
+
+    expect(started).toHaveLength(1);
+    expect(stopped).toEqual(["token-1"]);
+    expect(coordinator.handles.size).toBe(0);
   });
 
   test("rejects unsafe configured headers", () => {
